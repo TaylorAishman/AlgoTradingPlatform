@@ -16,8 +16,8 @@ jobs:
     steps:
       - uses: actions/checkout@v4
 
-      # TOOLCHAIN SETUP: replaced by the integrator with this project's
-      # setup steps (setup-node, setup-python, caches, install).
+      # TOOLCHAIN SETUP: none yet (repo has no code). Add setup-python/setup-node,
+      # cache and install steps here when a language is chosen.
 
       - name: Check
         run: |
@@ -34,7 +34,7 @@ jobs:
         with:
           fetch-depth: 0
 
-      # TOOLCHAIN SETUP: same as above.
+      # TOOLCHAIN SETUP: none yet, same as above.
 
       - name: Check each step
         env:

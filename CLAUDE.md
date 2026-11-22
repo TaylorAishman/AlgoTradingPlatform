@@ -5,8 +5,8 @@ Keep this file short. It is a map; details live in the files it points to.
 ## Commands
 
 - Check everything: `CHECK` in `.devteam/config` (lint, type check, tests, build). `/devteam:check` runs it.
-- Run the app: `TODO`
-- Run one test: `TODO`
+- Run the app: none yet (no code). Update when a toolchain is chosen.
+- Run one test: none yet (no tests). Update when a toolchain is chosen.
 
 ## Where things are
 
