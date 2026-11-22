@@ -1,2 +1,12 @@
 # Reference papers stay local: the repository is public and most are copyrighted.
 docs/reference/trading-papers/*.pdf
+
+# Default ATP_HOME: everything mutable stays local.
+var/
+.venv/
+__pycache__/
+*.egg-info/
+.mypy_cache/
+.ruff_cache/
+.pytest_cache/
+.hypothesis/
