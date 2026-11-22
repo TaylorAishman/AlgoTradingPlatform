@@ -20,7 +20,7 @@ Keep this file short. It is a map; details live in the files it points to.
 2. Tickets: `/devteam:tickets docs/design/<slug>/plan.md` creates one GitHub issue per plan task.
 3. Build: `/devteam:dispatch` runs the current wave. One ticket, one branch, one PR.
 4. Review: a clean-context reviewer comments with a verdict pinned to a commit.
-5. Merge: a human merges, or GitHub auto-merge after the `verify` check passes.
+5. Merge: a human merges. There is no CI workflow; the ticket's Proof command is the check.
 
 ## Rules
 
