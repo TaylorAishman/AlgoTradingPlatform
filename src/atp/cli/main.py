@@ -13,6 +13,7 @@ from __future__ import annotations
 
 import argparse
 import importlib
+import sys
 from collections.abc import Sequence
 
 DATASETS = ("bars", "corporate-actions", "assets", "calendar", "news", "quotes")
@@ -112,7 +113,7 @@ def main(argv: Sequence[str] | None = None) -> int:
     except ModuleNotFoundError as exc:
         if exc.name != name:
             raise
-        print(f"atp: command not implemented: {name}")
+        print(f"atp: command not implemented: {name}", file=sys.stderr)
         return 1
     return int(module.run(args))
 
