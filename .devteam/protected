@@ -1,0 +1,5 @@
+# Extra paths agents may not edit, one shell glob per line, relative to the repo root.
+# REVIEW.md and this file are always protected; .devteam/config and .github/workflows/* belong to the integrator.
+docs/reference/*
+# Example:
+# tests/golden/*

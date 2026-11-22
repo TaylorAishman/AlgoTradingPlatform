@@ -1,0 +1,53 @@
+name: ci
+
+# Owned by the integrator agent (/devteam:init sets it up for this project).
+# Runs the project's CHECK command from .devteam/config.
+on:
+  push:
+    branches: [main, master, 'chain/**', 'integration/**']
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  check:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      # TOOLCHAIN SETUP: replaced by the integrator with this project's
+      # setup steps (setup-node, setup-python, caches, install).
+
+      - name: Check
+        run: |
+          set -a; . .devteam/config; set +a
+          bash -c "$CHECK"
+
+  # Every step must pass on its own, so any single commit can be reverted.
+  # On integration branches, run CHECK at each step commit of each chain.
+  steps:
+    if: startsWith(github.ref_name, 'integration/')
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+
+      # TOOLCHAIN SETUP: same as above.
+
+      - name: Check each step
+        env:
+          DEFAULT: ${{ github.event.repository.default_branch }}
+        run: |
+          set -a; . .devteam/config; set +a
+          failed=0
+          for sha in $(git rev-list --reverse --no-merges "origin/$DEFAULT..HEAD"); do
+            git checkout -q "$sha"
+            if bash -c "$CHECK" >/tmp/step.log 2>&1; then
+              echo "pass $(git log -1 --format='%h %s')"
+            else
+              echo "::error::FAIL $(git log -1 --format='%h %s')"; tail -n 30 /tmp/step.log; failed=1
+            fi
+          done
+          exit "$failed"

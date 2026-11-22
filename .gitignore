@@ -1,0 +1,5 @@
+.devteam/worktrees/
+.devteam/state/
+
+# Reference papers stay local (public repo)
+docs/reference/trading-papers/*.pdf

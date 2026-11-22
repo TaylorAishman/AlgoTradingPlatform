@@ -1,0 +1,45 @@
+# devteam project settings. Sourced by bash. Owned by the integrator agent:
+# /devteam:init fills it in; edit it by hand if you disagree.
+
+# The one command that says the project works: lint, type check, tests, build.
+# Run by every agent before committing, by the integrator after each merge and
+# at each step, by land.sh after each landing, and by CI. Fast and deterministic.
+CHECK=""
+
+# 1: push integration/<slug> so CI runs on it. 0: stay local.
+CI_PUSH=0
+
+# --- Hands-off switches (all on: you read what landed, and revert if needed) ---
+
+# Land a design without asking when it has no open questions.
+AUTO_DESIGN=1
+# Land a chain without asking when it is integrated, its review passed, CHECK
+# passed at every step, and it touches nothing in LAND_HOLD.
+AUTO_LAND=1
+# Space-separated globs. Chains touching these always wait for /devteam:land.
+# Example: LAND_HOLD="migrations/* db/schema.* src/auth/* .env*"
+LAND_HOLD=""
+# Start a chain on top of its one unfinished After chain once that chain is
+# reviewed, instead of waiting for it to land.
+STACK=1
+# Run CHECK at every step commit before a chain may auto-land.
+STEP_CHECK=1
+# Break work down further automatically: when a step turns out too big (over
+# ~300 lines) or gets stuck, the architect re-cuts the rest of its chain.
+REPLAN=1
+# Re-plans allowed per chain before it waits for you.
+REPLAN_MAX=3
+# Chains running at once. Unset = every ready chain (the plan decides).
+# MAX_PARALLEL=8
+# Retry a failing CHECK once; a pass on retry is logged as flaky, not fatal.
+FLAKY_RETRY=1
+
+# --- Housekeeping ---
+
+# Delete worktrees and branches of landed work (merge commits keep the history).
+PRUNE_LANDED=1
+# Stash uncommitted changes in agent worktrees idle this many hours.
+STALE_HOURS=24
+
+# Set if the default branch is not detected from origin/HEAD.
+# DEFAULT_BRANCH=main
