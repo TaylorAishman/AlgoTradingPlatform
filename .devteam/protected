@@ -1,0 +1,5 @@
+# Extra paths agents may not edit, one shell glob per line, relative to the repo root.
+# REVIEW.md, .devteam/verify.sh, this file and .github/workflows/* are always protected.
+docs/reference/*
+# Example:
+# tests/golden/*
