@@ -98,7 +98,7 @@ def build_parser() -> argparse.ArgumentParser:
     report = top.add_parser("report", help="write a report")
     report_sub = report.add_subparsers(dest="subcommand", metavar="{run,paper}", required=True)
     for name in ("run", "paper"):
-        p = _leaf(report_sub, name, "report")
+        p = _leaf(report_sub, name, f"report_{name}")
         p.add_argument("--id", required=True, metavar="ID")
         p.add_argument("--out", metavar="PATH")
 

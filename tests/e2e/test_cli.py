@@ -116,3 +116,29 @@ def test_import_error_inside_module_is_reraised(monkeypatch: pytest.MonkeyPatch)
     monkeypatch.setattr(importlib, "import_module", fake)
     with pytest.raises(ModuleNotFoundError, match="dep"):
         main(["paper", "status"])
+
+
+# Module of every leaf command, as named by the plan (J04 to J21 file lists).
+LEAF_MODULES: list[tuple[list[str], str]] = [
+    (["data", "ingest", "--dataset", "bars"], "data_ingest"),
+    (["data", "check"], "data_check"),
+    (["universe", "build", "--config", "c"], "universe_build"),
+    (["backtest", "run", "--config", "c"], "backtest_run"),
+    (["validate", "--family", "f"], "validate"),
+    (["trials", "list"], "trials"),
+    (["trials", "show"], "trials"),
+    (["paper", "decide", "--config", "c"], "paper_decide"),
+    (["paper", "reconcile"], "paper_reconcile"),
+    (["paper", "status"], "paper_status"),
+    (["kill", "on"], "kill"),
+    (["kill", "off"], "kill"),
+    (["kill", "status"], "kill"),
+    (["report", "run", "--id", "i"], "report_run"),
+    (["report", "paper", "--id", "i"], "report_paper"),
+]
+
+
+def test_leaf_module_names_match_the_plan() -> None:
+    assert len(LEAF_MODULES) == len(COMMANDS)
+    for argv, module in LEAF_MODULES:
+        assert build_parser().parse_args(argv).module == module, argv
