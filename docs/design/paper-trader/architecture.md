@@ -118,7 +118,7 @@ One Cargo workspace, `members = ["crates/*"]`. Each component is one crate and o
 | H | `pt-strategy` (`crates/strategy`) | `Strategy` trait, volatility and covariance estimators, time-series momentum, the buy-and-hold benchmark | core, calendar |
 | I | `pt-portfolio` (`crates/portfolio`) | Target weights from signals and risk estimates; whole-share targets and the order plan | core |
 | J | `pt-risk` (`crates/risk`) | Pre-trade order checks; equity-based halts | core |
-| K | `pt-engine` (`crates/engine`) | Cost functions, the book, the decision function shared by backtest and paper, the simulated broker, the backtest loop | core, calendar, strategy, portfolio, risk |
+| K | `pt-engine` (`crates/engine`) | Cost functions, the book, the decision function shared by backtest and paper, the simulated broker, the backtest loop | core, calendar, config, strategy, portfolio, risk |
 | L | `pt-vector` (`crates/vector`) | The second, deliberately simple calculator, written from the specification in 5.10.5 only | core |
 | M | `pt-stats` (`crates/stats`) | Descriptive statistics, the normal distribution, Deflated Sharpe Ratio, Probability of Backtest Overfitting, simple regression | none |
 | N | `pt-gate` (`crates/gate`) | Owner file, operating stages, capability checks, the order permit, the owner checklist | core |
@@ -152,6 +152,33 @@ Module files. The scaffold creates every file below, empty except for `lib.rs` (
 | `pt-validate` | `runner`, `crosscheck`, `overfit`, `error` |
 | `pt-cli` | `main.rs`, `cli` (argument definitions), `wiring` (builds store, config, gate and client), and one module per command group: `cmd_config`, `cmd_data`, `cmd_backtest`, `cmd_validate`, `cmd_run`, `cmd_ops` |
 | `pt-archtest` | no library code; tests only |
+
+External crates. The `workspace` chain declares all of these, with versions in `[workspace.dependencies]`, so that no later chain edits a `Cargo.toml` or `Cargo.lock`. A crate also lists the workspace crates in its "Depends on" cell above. Declaring a crate that ends up unused is harmless; a missing one stops a later chain, so the scaffold errs on the side of declaring.
+
+| Crate | Dependencies | Dev-dependencies |
+| --- | --- | --- |
+| `pt-core` | `rust_decimal`, `chrono`, `serde`, `thiserror` | `serde_json` |
+| `pt-calendar` | `chrono`, `thiserror` | none |
+| `pt-config` | `serde`, `toml`, `rust_decimal`, `chrono`, `sha2`, `thiserror` | `tempfile` |
+| `pt-store` | `rusqlite` (feature `bundled`), `rust_decimal`, `chrono`, `thiserror` | `tempfile`, `rusqlite` |
+| `pt-alpaca` | `ureq`, `serde`, `serde_json`, `rust_decimal`, `chrono`, `thiserror` | `pt-mock-alpaca`, `tiny_http` |
+| `pt-mock-alpaca` | `tiny_http`, `serde_json`, `chrono` | `ureq`, `serde_json` |
+| `pt-data` | `csv`, `rust_decimal`, `chrono`, `thiserror` | `pt-mock-alpaca`, `tempfile` |
+| `pt-strategy` | `chrono`, `thiserror` | none |
+| `pt-portfolio` | `rust_decimal`, `thiserror` | none |
+| `pt-risk` | `rust_decimal` | none |
+| `pt-engine` | `rust_decimal`, `chrono`, `serde`, `serde_json`, `thiserror` | none |
+| `pt-vector` | `rust_decimal`, `chrono`, `thiserror` | none |
+| `pt-stats` | `thiserror` | none |
+| `pt-gate` | `serde`, `toml`, `chrono`, `thiserror` | `tempfile` |
+| `pt-live` | `rust_decimal`, `chrono`, `serde_json`, `thiserror` | `pt-mock-alpaca`, `tempfile` |
+| `pt-shadow` | `rust_decimal`, `chrono`, `serde_json`, `thiserror` | `tempfile` |
+| `pt-ops` | `ureq`, `serde_json`, `rust_decimal`, `chrono`, `thiserror` | `tiny_http`, `tempfile` |
+| `pt-validate` | `sha2`, `rust_decimal`, `chrono`, `thiserror` | none |
+| `pt-cli` | `clap` (feature `derive`), `anyhow`, `rust_decimal`, `chrono`, `serde_json` | `pt-mock-alpaca`, `tempfile`, `serde_json` |
+| `pt-archtest` | none | `serde_json`, `toml` |
+
+Version requirements: `rust_decimal` 1, `chrono` 0.4, `serde` 1 (feature `derive`), `serde_json` 1, `toml` 1, `thiserror` 2, `anyhow` 1, `rusqlite` 0.43, `ureq` 3, `tiny_http` 0.12, `clap` 4, `sha2` 0.11, `csv` 1, `tempfile` 3. All are MIT, Apache-2.0 or Unlicense (checked on crates.io on 2026-11-23). There is no random-number, async or logging-framework crate.
 
 Dependency rules that are tested (`pt-archtest`):
 
@@ -464,7 +491,9 @@ impl Store {
     pub fn order(&self, client_order_id: &str) -> Result<Option<OrderRow>, StoreError>;
     pub fn orders_in_states(&self, states: &[OrderState]) -> Result<Vec<OrderRow>, StoreError>;
     pub fn insert_fill(&self, f: &FillRow) -> Result<bool, StoreError>;        // false if already present
+    pub fn fills(&self) -> Result<Vec<FillRow>, StoreError>;                   // insertion order
     pub fn append_ledger(&self, e: &LedgerEntry) -> Result<i64, StoreError>;
+    pub fn ledger(&self, book: Book) -> Result<Vec<LedgerEntry>, StoreError>;  // insertion order
     pub fn positions(&self, book: Book) -> Result<Positions, StoreError>;
     pub fn cash(&self, book: Book) -> Result<Decimal, StoreError>;
     pub fn positions_at(&self, book: Book, through: NaiveDate) -> Result<Positions, StoreError>;   // entries dated on or before
@@ -585,6 +614,7 @@ impl MockAlpaca {
     pub fn seed_position(&self, symbol: &str, qty: i64);
     pub fn fill(&self, client_order_id: &str, qty: u64, price: &str);
     pub fn expire(&self, client_order_id: &str);
+    pub fn set_order_status(&self, client_order_id: &str, status: &str);   // any string, for failure drills
     pub fn fail_next(&self, n: usize, status: u16);
     pub fn deny_feed(&self, feed: &str);                // bars requests for this feed answer 403
 }
@@ -687,6 +717,7 @@ pub struct Decision { pub signals: SignalSet, pub risk: RiskEstimates, pub weigh
                       pub target: Positions, pub orders: Vec<OrderIntent>,
                       pub rejected: Vec<(OrderIntent, Rejection)> }
 pub struct DecisionParams { pub vol: VolParams, pub sizing: SizingParams, pub limits: RiskLimits }
+pub fn params_from_config(cfg: &Config) -> DecisionParams;     // the one place config becomes parameters
 pub fn decide_with(signals: SignalSet, risk: RiskEstimates, inputs: &DecisionInputs,
                    ref_prices: &BTreeMap<Symbol, Price>, p: &DecisionParams) -> Result<Decision, EngineError>;
 pub fn decide(inputs: &DecisionInputs, strategy: &dyn Strategy, view: &dyn MarketView,
@@ -811,7 +842,7 @@ pub struct RunOutcome { pub run_id: i64, pub status: RunStatus, pub phases: Vec<
 pub fn run_cycle(ctx: &LiveContext) -> Result<RunOutcome, LiveError>;
 // lock.rs
 pub struct RunLock { /* private; released on drop */ }
-pub fn acquire_run_lock(db_path: &Path) -> Result<RunLock, LiveError>;      // lock file `<db_path>.lock`
+pub fn acquire_run_lock(db_path: &Path) -> Result<RunLock, LiveError>;      // `File::try_lock` on `<db_path>.lock`; the OS frees it if the process dies
 // first_order.rs
 pub fn first_order(ctx: &LiveContext, wire_clock: &WireClock) -> Result<bool, LiveError>;   // true if it planned the order
 // killswitch.rs
@@ -856,6 +887,7 @@ pub fn pnl(series: &[(NaiveDate, Decimal)], asof: NaiveDate) -> Option<Pnl>;
 // report.rs
 pub struct ReportInputs<'a> { pub store: &'a Store, pub cfg: &'a Config, pub stage: &'a str,
                               pub fidelity: &'a [(String, String)],     // label, value; empty if none
+                              pub validation_signoff: Option<&'a str>,  // from the owner file
                               pub now: DateTime<Utc> }
 pub fn write_status(inp: &ReportInputs) -> Result<(PathBuf, PathBuf), OpsError>;       // status.md, status.json
 pub fn last_ok_run_age_hours(store: &Store, now: DateTime<Utc>) -> Result<Option<f64>, OpsError>;
@@ -888,6 +920,10 @@ Command line (`trader`). Global options: `--config <path>` (or `PT_CONFIG`).
 | `signoff report` | none | Write the fidelity and sign-off report |
 
 Exit codes: 0 success; 1 error; 2 completed but halted; 3 another run holds the lock; 4 the stage forbids the command.
+
+The dispatcher in `main.rs` holds this table. It checks the minimum stage, and for commands that need the network loads the keys and builds the client, before any command module runs. A refused command therefore makes no request, whatever the command module does.
+
+Identifiers: a rebalance order is `pt-<strategy id>-<signal date yyyymmdd>-<symbol>-<leg>`; the first order is `pt-first-<valid_on yyyymmdd>-<symbol>`; a flatten order is `pt-flatten-<yyyymmdd>-<symbol>`.
 
 ### 5.9 Alpaca facts the client is built on
 
@@ -996,7 +1032,7 @@ Written in full by the scaffold. `String` payloads carry a human-readable detail
 | `CoreError` | `InvalidSymbol(String)`, `NonPositivePrice`, `NotFinite`, `InvalidOrder(String)`, `InvalidCost(String)` |
 | `CalendarError` | `Empty`, `NotSorted`, `Duplicate(NaiveDate)` |
 | `ConfigError` | `Io(String)`, `Parse(String)`, `Invalid(String)`, `MissingCredentials`, `InsecureSecretsFile(String)` |
-| `StoreError` | `Sql(String)`, `Duplicate(String)`, `IllegalTransition { from: OrderState, to: OrderState }`, `SchemaTooNew { found: i64, supported: i64 }`, `NotFound(String)`, `Codec(String)` |
+| `StoreError` | `Sql(String)`, `Duplicate(String)`, `IllegalTransition { from: String, to: String }`, `SchemaTooNew { found: i64, supported: i64 }`, `NotFound(String)`, `Codec(String)` |
 | `AlpacaError` | `EndpointNotAllowed(String)`, `RateLimited`, `Server { status: u16 }`, `Rejected { status: u16, message: String }`, `FeedNotPermitted { feed: String, message: String }`, `PermitMismatch`, `UnexpectedBarTime(String)`, `Parse(String)`, `Transport(String)` |
 | `DataError` | `Store(StoreError)`, `Alpaca(AlpacaError)`, `Csv { line: usize, message: String }`, `BadBar { symbol: String, date: NaiveDate, message: String }`, `Invalid(String)` |
 | `StrategyError` | `MissingRiskFree(NaiveDate)`, `NotASession(NaiveDate)`, `Invalid(String)` |
@@ -1010,7 +1046,9 @@ Written in full by the scaffold. `String` payloads carry a human-readable detail
 | `OpsError` | `Store(StoreError)`, `Io(String)` |
 | `ValidateError` | `Store(StoreError)`, `Data(DataError)`, `Engine(EngineError)`, `Vector(VectorError)`, `Stats(StatsError)`, `NotComparable(String)`, `TooFewTrials`, `Invalid(String)` |
 
-Halt reasons are strings: `reconciliation_position`, `reconciliation_cash`, `foreign_order`, `fractional_position`, `account_not_flat`, `unexpected_order_status`, `daily_loss`, `drawdown`, `manual`, `flattened`.
+A fractional broker position is an `AlpacaError::Parse`: the run fails and alerts on every attempt until the owner removes it, so no separate halt reason exists for it.
+
+Halt reasons are strings: `reconciliation_position`, `reconciliation_cash`, `foreign_order`, `account_not_flat`, `unexpected_order_status`, `daily_loss`, `drawdown`, `manual`, `flattened`.
 
 Alert codes are strings: `data_not_ready`, `feed_error`, `broker_error`, `order_rejected`, `order_abandoned`, `incomplete_fill`, `late_rebalance_skipped`, `halt_set`, `missed_run`, `not_tradable`.
 
@@ -1123,14 +1161,14 @@ The owner performs each step once. The binary checks every one at run time and `
 
 | Phase | Operating stage | What it delivers | Chains (see `plan.md`) | Exit check |
 | --- | --- | --- | --- | --- |
-| 0 Foundation | none | Workspace, types, calendar, config, store, statistics, mock broker | workspace, core-types, calendar, config, secrets, store-*, stats-*, mock-broker | Policy tests pass |
-| 1 Offline backtest | `backtest` | Strategy, sizing, risk checks, engine, vector cross-check, trial registry, DSR, PBO, benchmark, CSV import | strategy-*, portfolio-*, risk, engine-*, vector, validate-*, data-import, data-view, cli-base, cli-backtest, cli-validate | Engine and vector calculator agree exactly at zero cost |
-| 2 Live data | `ingest` | Alpaca client, ingest, calendar and asset sync, universe verification, smoke test | alpaca-*, data-ingest, data-reference, cli-data | `doctor` and `universe verify` pass with the owner's keys |
-| 3 Dry run | `dry_run` | Gates, decisions recorded without orders, alerts, report, schedule | gate-*, live-ids, live-snapshots, live-rebalance, ops-*, cli-live | A dry-run decision appears after each month end and replays exactly |
-| 4 One order | `first_order` | Submission, settlement from fills, ledger, reconciliation | live-submit, live-settle, live-reconcile, live-first-order | The approved order fills and the ledger equals the broker |
-| 5 Full paper | `paper` | Monthly rebalances, shadow comparison, fidelity metrics, sign-off report, kill switch | live-cycle, live-killswitch, shadow-*, cli-ops | Sign-off criteria pass over the window; the owner signs off |
+| 0 Foundation | none | Workspace, types, calendar, config, store, statistics, mock broker | workspace, core-*, calendar, config, config-hash, secrets, store-*, stats-*, mock-* | Policy tests pass |
+| 1 Offline backtest | `backtest` | Strategy, sizing, risk checks, engine, vector cross-check, trial registry, DSR, PBO, benchmark, CSV import | strategy-*, portfolio-*, risk, engine-*, vector, validate-*, data-import, data-view, data-quality, cli-base, cli-import, cli-backtest, cli-validate | Engine and vector calculator agree exactly at zero cost |
+| 2 Live data | `ingest` | Alpaca client, ingest, calendar and asset sync, universe verification, smoke test | alpaca-*, data-ingest, data-reference, data-universe, data-doctor, cli-data | `doctor` and `universe verify` pass with the owner's keys |
+| 3 Dry run | `dry_run` | Gates, decisions recorded without orders, alerts, report, schedule | gate-*, ops-*, live-ids, live-lock, live-context, live-snapshots, live-rebalance, live-rebalance-timing, cli-deploy | A dry-run decision appears after each month end and replays exactly |
+| 4 One order | `first_order` | Submission, settlement from fills, ledger, reconciliation | live-submit, live-settle, live-legs, live-reconcile, live-first-order | The approved order fills and the ledger equals the broker |
+| 5 Full paper | `paper` | Monthly rebalances, shadow comparison, fidelity metrics, sign-off report, kill switch | live-cycle, live-cycle-failures, live-killswitch, shadow-*, cli-live, cli-ops, cli-e2e | Sign-off criteria pass over the window; the owner signs off |
 
-Every phase is built and tested before any owner step, against the mock broker. The stages are how the owner turns the phases on.
+Every phase is built and tested before any owner step, against the mock broker. The stages are how the owner turns the phases on. A chain is listed under the first phase that needs it; the order chains are built in is the wave table in `plan.md`, which follows code dependencies, not phases.
 
 Later work, each needing its own design: intraday bars and realised-volatility (HAR) forecasts; the `trade_updates` websocket; order-book strategies; options; crypto; machine-learning signal combination; LLM text features and agents; covariance shrinkage and optimisation with `clarabel`; partial rebalancing; automatic corporate-action handling; a Parquet research store; publishing the report.
 
