@@ -43,7 +43,7 @@ What paper account does the system own, and at what size?
 
 The team decides these. The owner may override any of them.
 
-- **Companion literature review:** it is not in the repo, and nothing depends on it. Where the brief and a PDF disagree, the brief wins on decisions and the PDF wins on method detail. Record this in architecture.md, since the authority table in `docs/reference/README.md` is still TODO.
+- **Companion literature review:** added later as `docs/reference/literature-review-for-builders.md`. It is guidance, not a decision; the authority order is in architecture.md section 2.1.
 - **PDFs are local only:** they are gitignored and absent from build-agent worktrees, so every formula the build needs must be transcribed into the design docs.
 - **Universe:** about 30-40 liquid US-listed ETFs covering equity regions, Treasuries by maturity, credit, commodities, currencies and real estate, kept as a candidate list in config. A command checks that each is tradable, shortable and has history since 2016, run against Alpaca once the owner supplies keys. No crypto, options or single stocks.
 - **Strategy parameters:** they follow Moskowitz, Ooi and Pedersen and are fixed in advance, with no parameter search. 12-month lookback, 1-month hold, sign signal, EWMA volatility with a 60-day center of mass annualized with 261. The 1/3/12-month blend is a config option, off by default. A T-bill ETF stands in for the risk-free rate. The trial count is recorded in SQLite so the Deflated Sharpe Ratio stays honest.
