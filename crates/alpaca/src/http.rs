@@ -7,7 +7,7 @@ use std::time::Duration;
 use crate::auth::Credentials;
 use crate::endpoints::Endpoints;
 use crate::error::AlpacaError;
-use crate::limiter::{RateLimiter, Sleeper, SystemClock, ThreadSleeper};
+use crate::limiter::{RateLimiter, Sleeper, SystemClock};
 
 /// Waits before each retry after a 429 reply (R-085).
 const RATE_LIMIT_WAITS_SECS: [u64; 4] = [15, 30, 45, 60];
@@ -32,12 +32,20 @@ impl fmt::Debug for HttpClient {
     }
 }
 
+/// A sleeper that returns at once, so the test client never really waits.
+struct NoSleep;
+
+impl Sleeper for NoSleep {
+    fn sleep(&self, _d: Duration) {}
+}
+
 /// A client for tests: both base URLs point at `url`, which must be a loopback
-/// host. Any other host is refused with `EndpointNotAllowed`.
+/// host. Any other host is refused with `EndpointNotAllowed`. It has no rate
+/// limit and never sleeps (architecture 5.5).
 pub fn loopback_client(url: &str) -> Result<HttpClient, AlpacaError> {
     let endpoints = Endpoints::with_overrides(Some(url), Some(url))?;
-    let sleeper: Arc<dyn Sleeper> = Arc::new(ThreadSleeper);
-    let limiter = RateLimiter::new(200, Arc::new(SystemClock::new()), sleeper.clone());
+    let sleeper: Arc<dyn Sleeper> = Arc::new(NoSleep);
+    let limiter = RateLimiter::new(u32::MAX, Arc::new(SystemClock::new()), sleeper.clone());
     let creds = Credentials::new("loopback-key".to_string(), "loopback-secret".to_string());
     Ok(HttpClient::new(endpoints, creds, limiter, sleeper))
 }
@@ -70,6 +78,12 @@ impl HttpClient {
     /// GET `path` on the trading base URL and return the body of a 2xx reply.
     pub fn get_trading(&self, path: &str) -> Result<String, AlpacaError> {
         let url = format!("{}{}", self.endpoints.trading(), path);
+        self.get(&url)
+    }
+
+    /// GET `path_and_query` on the market data base URL and return the body of a 2xx reply.
+    pub fn get_data(&self, path_and_query: &str) -> Result<String, AlpacaError> {
+        let url = format!("{}{}", self.endpoints.data(), path_and_query);
         self.get(&url)
     }
 
