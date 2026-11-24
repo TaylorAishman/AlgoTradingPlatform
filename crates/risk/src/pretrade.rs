@@ -22,6 +22,7 @@ pub enum Rejection {
     NoEquity,
     OrderNotional,
     WeightCap,
+    Gross,
 }
 
 /// Orders split into approved and rejected (with the reason).
@@ -31,8 +32,13 @@ pub struct GateOutcome {
     pub rejected: Vec<(OrderIntent, Rejection)>,
 }
 
-/// Check each order against the limits, in order: NoEquity, OrderNotional, WeightCap.
-/// Each order sees the position left by the orders approved before it.
+/// Check each order against the limits, in order: NoEquity, OrderNotional, WeightCap, Gross.
+/// Each order sees the position left by the orders approved before it. Then the
+/// projected gross exposure over the whole batch is checked: if it exceeds
+/// `max_gross * equity`, every order that passed the earlier checks is rejected
+/// with `Gross`. An ordered symbol missing from `prices` is valued at the
+/// order's reference price; a held symbol with no price at all cannot be valued,
+/// so the whole batch is rejected with `Gross` (fail closed).
 pub fn check_orders(
     orders: &[OrderIntent],
     positions: &Positions,
@@ -68,6 +74,28 @@ pub fn check_orders(
         }
         running.insert(o.symbol.clone(), after);
         out.approved.push(o.clone());
+    }
+    if !out.approved.is_empty() {
+        let mut ref_prices: BTreeMap<&Symbol, Price> = BTreeMap::new();
+        for o in orders {
+            ref_prices.entry(&o.symbol).or_insert(o.reference_price);
+        }
+        let mut gross = Decimal::ZERO;
+        let mut unpriced = false;
+        for (sym, qty) in &running {
+            if *qty == 0 {
+                continue;
+            }
+            match prices.get(sym).or_else(|| ref_prices.get(sym)) {
+                Some(p) => gross += (p.value() * Decimal::from(*qty)).abs(),
+                None => unpriced = true,
+            }
+        }
+        if unpriced || gross > limits.max_gross * equity.0 {
+            for o in std::mem::take(&mut out.approved) {
+                out.rejected.push((o, Rejection::Gross));
+            }
+        }
     }
     out
 }
