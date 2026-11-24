@@ -38,6 +38,22 @@ pub struct AuthContext {
 
 /// Proof that the gate authorised exactly one order. Only `Gate::authorize`
 /// can create one: the field is private and there is no public constructor.
+///
+/// R-265: a struct literal written outside this crate does not compile, because
+/// the field is private.
+///
+/// ```compile_fail,E0451
+/// use pt_gate::gate::{OrderPermit, OrderSummary};
+///
+/// let _forged = OrderPermit {
+///     order: OrderSummary {
+///         client_order_id: "x".to_string(),
+///         symbol: "SPY".to_string(),
+///         side: "buy".to_string(),
+///         qty: 1,
+///     },
+/// };
+/// ```
 #[derive(Debug)]
 pub struct OrderPermit {
     order: OrderSummary,
