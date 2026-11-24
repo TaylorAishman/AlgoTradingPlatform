@@ -29,15 +29,64 @@ pub struct PboResult {
     pub rows_used: usize,
 }
 
-fn sharpe(rows: &[&Vec<f64>], col: usize) -> f64 {
-    let n = rows.len() as f64;
-    let mean = rows.iter().map(|r| r[col]).sum::<f64>() / n;
-    let var = rows.iter().map(|r| (r[col] - mean).powi(2)).sum::<f64>() / (n - 1.0);
-    let sd = var.sqrt();
-    if sd > 0.0 {
-        mean / sd
-    } else {
-        0.0
+/// Per-block, per-trial sums and centred sums of squares, laid out `block * cols + col`.
+struct BlockStats {
+    cols: usize,
+    block_len: f64,
+    sum: Vec<f64>,
+    m2: Vec<f64>,
+}
+
+impl BlockStats {
+    fn new(used: &[Vec<f64>], partitions: usize, block: usize, cols: usize) -> Self {
+        let mut sum = vec![0.0; partitions * cols];
+        let mut m2 = vec![0.0; partitions * cols];
+        for b in 0..partitions {
+            let rows = &used[b * block..(b + 1) * block];
+            for c in 0..cols {
+                let s: f64 = rows.iter().map(|r| r[c]).sum();
+                let mean = s / block as f64;
+                sum[b * cols + c] = s;
+                m2[b * cols + c] = rows.iter().map(|r| (r[c] - mean).powi(2)).sum();
+            }
+        }
+        BlockStats {
+            cols,
+            block_len: block as f64,
+            sum,
+            m2,
+        }
+    }
+
+    /// Sharpe ratio of trial `col` over the blocks where `mask[b] == in_sample`.
+    ///
+    /// Block moments are pooled exactly: the total centred sum of squares is the sum of the
+    /// block ones plus each block's size times its squared offset from the pooled mean.
+    fn sharpe(&self, mask: &[bool], in_sample: bool, col: usize) -> f64 {
+        let mut total = 0.0;
+        let mut count = 0usize;
+        for (b, &m) in mask.iter().enumerate() {
+            if m == in_sample {
+                total += self.sum[b * self.cols + col];
+                count += 1;
+            }
+        }
+        let n = count as f64 * self.block_len;
+        let mean = total / n;
+        let mut ss = 0.0;
+        for (b, &m) in mask.iter().enumerate() {
+            if m == in_sample {
+                let i = b * self.cols + col;
+                let d = self.sum[i] / self.block_len - mean;
+                ss += self.m2[i] + self.block_len * d * d;
+            }
+        }
+        let sd = (ss / (n - 1.0)).sqrt();
+        if sd > 0.0 {
+            mean / sd
+        } else {
+            0.0
+        }
     }
 }
 
@@ -80,29 +129,28 @@ pub fn pbo_cscv(returns: &[Vec<f64>], partitions: usize) -> Result<PboResult, St
     let rows_used = block * partitions;
     let used = &returns[returns.len() - rows_used..];
     let half = partitions / 2;
+    let stats = BlockStats::new(used, partitions, block, cols);
     let mut idx: Vec<usize> = (0..half).collect();
-    let mut logits = Vec::new();
+    let mut mask = vec![false; partitions];
+    let mut oos = vec![0.0; cols];
+    let mut logits = Vec::with_capacity(usize::try_from(n_combinations(partitions)).unwrap_or(0));
     loop {
-        let mut is_rows: Vec<&Vec<f64>> = Vec::new();
-        let mut oos_rows: Vec<&Vec<f64>> = Vec::new();
-        for b in 0..partitions {
-            let target = if idx.contains(&b) {
-                &mut is_rows
-            } else {
-                &mut oos_rows
-            };
-            target.extend(used[b * block..(b + 1) * block].iter());
+        mask.iter_mut().for_each(|m| *m = false);
+        for &b in &idx {
+            mask[b] = true;
         }
         let mut best = 0;
         let mut best_sr = f64::NEG_INFINITY;
         for c in 0..cols {
-            let sr = sharpe(&is_rows, c);
+            let sr = stats.sharpe(&mask, true, c);
             if sr > best_sr {
                 best_sr = sr;
                 best = c;
             }
         }
-        let oos: Vec<f64> = (0..cols).map(|c| sharpe(&oos_rows, c)).collect();
+        for (c, v) in oos.iter_mut().enumerate() {
+            *v = stats.sharpe(&mask, false, c);
+        }
         // Ascending rank, 1 for the worst, mean rank on ties (architecture 5.10.7 step 4).
         let less = oos.iter().filter(|&&v| v < oos[best]).count();
         let equal = oos.iter().filter(|&&v| v == oos[best]).count();
