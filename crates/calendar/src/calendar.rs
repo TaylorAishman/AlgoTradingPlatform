@@ -43,4 +43,14 @@ impl TradingCalendar {
         let i = self.sessions.partition_point(|&s| s < date);
         i.checked_sub(1).map(|j| self.sessions[j])
     }
+
+    /// Sessions in `start..=end`, inclusive at both ends. Empty when `start > end`.
+    pub fn sessions_between(&self, start: NaiveDate, end: NaiveDate) -> &[NaiveDate] {
+        let lo = self.sessions.partition_point(|&s| s < start);
+        let hi = self.sessions.partition_point(|&s| s <= end);
+        if lo >= hi {
+            return &[];
+        }
+        &self.sessions[lo..hi]
+    }
 }
