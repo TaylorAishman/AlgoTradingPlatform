@@ -57,6 +57,13 @@ pub fn fill_cost(
     Ok(Money(spread_fee + impact_cost))
 }
 
+/// Borrow cost on a short market value over `days` calendar days:
+/// `short_value * borrow_bps_annual / 10000 * days / 360`, rounded to six places.
+pub fn borrow_cost(spec: &CostSpec, short_value: Money, days: i64) -> Money {
+    let annual = short_value.0 * spec.borrow_bps_annual / Decimal::from(BPS);
+    Money(round6(annual * Decimal::from(days) / Decimal::from(360)))
+}
+
 /// Square root of a non-negative decimal by Newton iteration. Returns an
 /// exact root when one exists at fewer digits than the converged value.
 fn decimal_sqrt(x: Decimal) -> Decimal {
