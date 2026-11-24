@@ -256,9 +256,9 @@ fn submit(body: &str, state: &mut State) -> (u16, String) {
     ) else {
         return refuse("missing order field");
     };
-    if parse_dec(&qty).is_none() {
+    let Some(want) = parse_dec(&qty) else {
         return refuse("invalid order qty");
-    }
+    };
     if side != "buy" && side != "sell" {
         return refuse("invalid order side");
     }
@@ -271,6 +271,28 @@ fn submit(body: &str, state: &mut State) -> (u16, String) {
         .any(|o| o.client_order_id == client_order_id)
     {
         return refuse("client_order_id must be unique");
+    }
+    if side == "sell" {
+        let held = state
+            .positions
+            .iter()
+            .find(|(s, _)| *s == symbol)
+            .map_or(0, |(_, q)| *q);
+        let shortable = state
+            .assets
+            .iter()
+            .find(|a| a.symbol == symbol)
+            .is_some_and(|a| a.shortable);
+        let message = if held > 0 && want > held {
+            Some("insufficient qty available for order")
+        } else if held <= 0 && !shortable {
+            Some("asset cannot be sold short: insufficient qty available for order")
+        } else {
+            None
+        };
+        if let Some(m) = message {
+            return (403, json!({"message": m}).to_string());
+        }
     }
     let order = Order {
         id,
