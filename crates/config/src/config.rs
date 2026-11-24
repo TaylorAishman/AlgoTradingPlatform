@@ -278,6 +278,7 @@ pub struct Config {
     pub cost: CostCfg,
     #[serde(default)]
     pub signoff: SignoffCfg,
+    #[serde(default)]
     pub universe: Vec<Instrument>,
 }
 
@@ -313,6 +314,24 @@ fn validate(cfg: &Config) -> Result<(), ConfigError> {
             return Err(ConfigError::Invalid(
                 "cost.shadow.impact_coeff must be 0 when data.feed is \"iex\"".into(),
             ));
+        }
+    }
+    if cfg.universe.is_empty() {
+        return Err(ConfigError::Invalid("universe must not be empty".into()));
+    }
+    let mut seen = std::collections::HashSet::new();
+    for inst in &cfg.universe {
+        if !seen.insert(inst.symbol.as_str()) {
+            return Err(ConfigError::Invalid(format!(
+                "universe contains duplicate symbol \"{}\"",
+                inst.symbol
+            )));
+        }
+        if inst.symbol == cfg.strategy.risk_free_symbol {
+            return Err(ConfigError::Invalid(format!(
+                "universe must not contain the risk-free symbol \"{}\"",
+                inst.symbol
+            )));
         }
     }
     Ok(())
