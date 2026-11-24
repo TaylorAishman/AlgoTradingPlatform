@@ -1,4 +1,4 @@
-//! Reference data endpoints: the market clock and the trading calendar.
+//! Reference data endpoints: the market clock, the trading calendar and assets.
 
 use chrono::{DateTime, FixedOffset, NaiveDate};
 
@@ -65,4 +65,45 @@ pub fn calendar(
                 .map_err(|e| AlpacaError::Parse(format!("date: {e}")))
         })
         .collect()
+}
+
+/// The asset fields the system reads.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct WireAsset {
+    pub symbol: String,
+    pub tradable: bool,
+    pub shortable: bool,
+    pub easy_to_borrow: bool,
+}
+
+/// GET /v2/assets/{symbol} on the trading base URL; a 404 is `Ok(None)`.
+///
+/// Borrow status is read from the boolean `easy_to_borrow` field when present,
+/// otherwise from `borrow_status == "easy_to_borrow"`; absent both, false.
+pub fn asset(http: &HttpClient, symbol: &str) -> Result<Option<WireAsset>, AlpacaError> {
+    let body = match http.get_trading(&format!("/v2/assets/{symbol}")) {
+        Ok(b) => b,
+        Err(AlpacaError::Rejected { status: 404, .. }) => return Ok(None),
+        Err(e) => return Err(e),
+    };
+    let v: serde_json::Value =
+        serde_json::from_str(&body).map_err(|e| AlpacaError::Parse(e.to_string()))?;
+    let missing = |k: &str| AlpacaError::Parse(format!("asset field {k} missing"));
+    let flag = |k: &str| -> Result<bool, AlpacaError> {
+        v.get(k).and_then(|x| x.as_bool()).ok_or_else(|| missing(k))
+    };
+    let easy_to_borrow = match v.get("easy_to_borrow").and_then(|x| x.as_bool()) {
+        Some(b) => b,
+        None => v.get("borrow_status").and_then(|x| x.as_str()) == Some("easy_to_borrow"),
+    };
+    Ok(Some(WireAsset {
+        symbol: v
+            .get("symbol")
+            .and_then(|x| x.as_str())
+            .map(str::to_string)
+            .ok_or_else(|| missing("symbol"))?,
+        tradable: flag("tradable")?,
+        shortable: flag("shortable")?,
+        easy_to_borrow,
+    }))
 }
