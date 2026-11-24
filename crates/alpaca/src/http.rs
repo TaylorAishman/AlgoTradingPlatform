@@ -73,6 +73,12 @@ impl HttpClient {
         self.get(&url)
     }
 
+    /// GET `path_and_query` on the market data base URL and return the body of a 2xx reply.
+    pub fn get_data(&self, path_and_query: &str) -> Result<String, AlpacaError> {
+        let url = format!("{}{}", self.endpoints.data(), path_and_query);
+        self.get(&url)
+    }
+
     fn get(&self, url: &str) -> Result<String, AlpacaError> {
         let mut retries = 0;
         let mut server_retries = 0;
