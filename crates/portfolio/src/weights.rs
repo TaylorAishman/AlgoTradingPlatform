@@ -35,13 +35,14 @@ fn to_decimal(x: f64) -> Decimal {
 /// `u_i = signal_i / vol_i`, `w_i = u_i * target_vol / sqrt(u' C u)`, each clamped to
 /// `[-max_weight, max_weight]`, then all scaled down together if gross exceeds `max_gross`,
 /// rounded to 6 places.
+/// A short signal in a symbol not in `shortable` is set to zero before scaling.
 /// A symbol without a positive volatility gets weight 0. If the portfolio volatility is
 /// zero, or a covariance entry between two sized symbols is missing, every weight is 0:
 /// no position is taken on risk that cannot be measured.
 pub fn target_weights(
     signals: &BTreeMap<Symbol, f64>,
     risk: &RiskEstimates,
-    _shortable: &BTreeSet<Symbol>,
+    shortable: &BTreeSet<Symbol>,
     p: &SizingParams,
 ) -> Weights {
     let zeros: Weights = signals.keys().map(|s| (s.clone(), Decimal::ZERO)).collect();
@@ -49,6 +50,10 @@ pub fn target_weights(
     let u: Vec<(&Symbol, f64)> = signals
         .iter()
         .filter_map(|(s, &sig)| {
+            // A short in a symbol that cannot be shorted is flat, before any scaling.
+            if sig < 0.0 && !shortable.contains(s) {
+                return None;
+            }
             let vol = *risk.vols.get(s)?;
             (vol.is_finite() && vol > 0.0 && sig.is_finite()).then_some((s, sig / vol))
         })
