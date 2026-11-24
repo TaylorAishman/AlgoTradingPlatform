@@ -33,7 +33,8 @@ fn to_decimal(x: f64) -> Decimal {
 /// Inverse-volatility weights scaled so the portfolio volatility equals `target_vol`.
 ///
 /// `u_i = signal_i / vol_i`, `w_i = u_i * target_vol / sqrt(u' C u)`, each clamped to
-/// `[-max_weight, max_weight]`, rounded to 6 places.
+/// `[-max_weight, max_weight]`, then all scaled down together if gross exceeds `max_gross`,
+/// rounded to 6 places.
 /// A symbol without a positive volatility gets weight 0. If the portfolio volatility is
 /// zero, or a covariance entry between two sized symbols is missing, every weight is 0:
 /// no position is taken on risk that cannot be measured.
@@ -68,10 +69,23 @@ pub fn target_weights(
     let scale = p.target_vol / variance.sqrt();
 
     let cap = to_decimal(p.max_weight.abs());
+    let clamped: Vec<(&Symbol, Decimal)> = u
+        .into_iter()
+        .map(|(s, us)| (s, to_decimal(us * scale).max(-cap).min(cap)))
+        .collect();
+
+    // Gross cap: shrink every weight by the same factor, never grow them.
+    let max_gross = to_decimal(p.max_gross.abs());
+    let gross: Decimal = clamped.iter().map(|(_, w)| w.abs()).sum();
+    let factor = if gross > max_gross {
+        max_gross / gross
+    } else {
+        Decimal::ONE
+    };
+
     let mut weights = zeros;
-    for (s, us) in u {
-        let w = to_decimal(us * scale).max(-cap).min(cap);
-        weights.insert(s.clone(), round6(w));
+    for (s, w) in clamped {
+        weights.insert(s.clone(), round6(w * factor));
     }
     weights
 }
