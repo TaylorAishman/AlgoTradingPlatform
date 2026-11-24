@@ -1,6 +1,6 @@
-//! Reference data endpoints: the market clock.
+//! Reference data endpoints: the market clock and the trading calendar.
 
-use chrono::{DateTime, FixedOffset};
+use chrono::{DateTime, FixedOffset, NaiveDate};
 
 use crate::error::AlpacaError;
 use crate::http::HttpClient;
@@ -35,4 +35,34 @@ pub fn clock(http: &HttpClient) -> Result<WireClock, AlpacaError> {
         next_open: instant("next_open")?,
         next_close: instant("next_close")?,
     })
+}
+
+/// GET /v2/calendar?start=&end= on the trading base URL; the session dates.
+pub fn calendar(
+    http: &HttpClient,
+    start: NaiveDate,
+    end: NaiveDate,
+) -> Result<Vec<NaiveDate>, AlpacaError> {
+    let path = format!(
+        "/v2/calendar?start={}&end={}",
+        start.format("%Y-%m-%d"),
+        end.format("%Y-%m-%d")
+    );
+    let body = http.get_trading(&path)?;
+    let v: serde_json::Value =
+        serde_json::from_str(&body).map_err(|e| AlpacaError::Parse(e.to_string()))?;
+    let items = v
+        .as_array()
+        .ok_or_else(|| AlpacaError::Parse("calendar body is not an array".to_string()))?;
+    items
+        .iter()
+        .map(|item| {
+            let s = item
+                .get("date")
+                .and_then(|x| x.as_str())
+                .ok_or_else(|| AlpacaError::Parse("calendar field date missing".to_string()))?;
+            NaiveDate::parse_from_str(s, "%Y-%m-%d")
+                .map_err(|e| AlpacaError::Parse(format!("date: {e}")))
+        })
+        .collect()
 }
