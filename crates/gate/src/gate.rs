@@ -118,10 +118,19 @@ impl Gate {
         ctx: &AuthContext,
     ) -> Result<OrderPermit, GateError> {
         match self.owner.stage {
-            Stage::Paper => {}
-            Stage::Backtest | Stage::Ingest | Stage::DryRun | Stage::FirstOrder => {
+            Stage::Paper | Stage::FirstOrder => {}
+            Stage::Backtest | Stage::Ingest | Stage::DryRun => {
                 return Err(GateError::StageForbids);
             }
+        }
+        // R-267: no order, of any kind, before the owner confirms the account
+        // is flat. Checked before every other rule, so no flag waives it.
+        if self.owner.account_flat_confirmed_on.is_none() {
+            return Err(GateError::FlatNotConfirmed);
+        }
+        // The first-order rules are not built yet: refuse until they are.
+        if self.owner.stage == Stage::FirstOrder {
+            return Err(GateError::StageForbids);
         }
         if !self.owner.strategy_allowlist.contains(&ctx.strategy_id) {
             return Err(GateError::StrategyNotAllowed);
