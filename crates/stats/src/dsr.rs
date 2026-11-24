@@ -20,9 +20,19 @@ pub fn expected_max_sharpe(var_sr: f64, n_trials: u32) -> f64 {
 
 /// Probabilistic Sharpe Ratio: the probability that the true Sharpe ratio exceeds
 /// `sr_benchmark`, given the observed per-period `sr` over `t` observations with `skew` and
-/// (non-excess) `kurt`. Input validation is added in a later step.
+/// (non-excess) `kurt`. Fails with `TooFewObservations` when `t < 2` and `OutOfDomain` when the
+/// variance term under the square root is not positive.
 pub fn psr(sr: f64, t: usize, skew: f64, kurt: f64, sr_benchmark: f64) -> Result<f64, StatsError> {
-    let denom = (1.0 - skew * sr + (kurt - 1.0) / 4.0 * sr * sr).sqrt();
+    if t < 2 {
+        return Err(StatsError::TooFewObservations);
+    }
+    let variance_term = 1.0 - skew * sr + (kurt - 1.0) / 4.0 * sr * sr;
+    if variance_term.is_nan() || variance_term <= 0.0 {
+        return Err(StatsError::OutOfDomain(format!(
+            "non-positive variance term {variance_term}"
+        )));
+    }
+    let denom = variance_term.sqrt();
     let z = (sr - sr_benchmark) * ((t as f64) - 1.0).sqrt() / denom;
     Ok(norm_cdf(z))
 }
