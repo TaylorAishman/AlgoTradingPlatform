@@ -52,12 +52,64 @@ impl Default for OwnerFile {
     }
 }
 
+#[derive(Deserialize)]
+#[serde(deny_unknown_fields)]
+struct RawFirstOrder {
+    symbol: String,
+    side: String,
+    max_qty: u64,
+    valid_on: toml::value::Datetime,
+}
+
+#[derive(Deserialize)]
+#[serde(deny_unknown_fields)]
+struct RawOwner {
+    stage: Stage,
+    #[serde(default)]
+    strategy_allowlist: Vec<String>,
+    account_flat_confirmed_on: Option<toml::value::Datetime>,
+    first_order: Option<RawFirstOrder>,
+    validation_signoff: Option<String>,
+    alert_webhook_url: Option<String>,
+}
+
+/// Convert a TOML local date (no time, no offset) to a `NaiveDate`.
+fn to_date(value: toml::value::Datetime, key: &str) -> Result<NaiveDate, GateError> {
+    let bad = || GateError::Parse(format!("{key} must be a date like 2026-12-01"));
+    if value.time.is_some() || value.offset.is_some() {
+        return Err(bad());
+    }
+    let d = value.date.ok_or_else(bad)?;
+    NaiveDate::from_ymd_opt(i32::from(d.year), u32::from(d.month), u32::from(d.day)).ok_or_else(bad)
+}
+
 /// Load the owner file. A missing file is the default (backtest, nothing granted).
 pub fn load_owner_file(path: &Path, _repo_root: &Path) -> Result<OwnerFile, GateError> {
     if !path.exists() {
         return Ok(OwnerFile::default());
     }
-    Err(GateError::Parse(
-        "owner file parsing is not implemented".into(),
-    ))
+    let text = std::fs::read_to_string(path)
+        .map_err(|e| GateError::Parse(format!("cannot read owner file: {e}")))?;
+    let raw: RawOwner = toml::from_str(&text).map_err(|e| GateError::Parse(e.to_string()))?;
+    let first_order = match raw.first_order {
+        Some(f) => Some(FirstOrderApproval {
+            symbol: f.symbol,
+            side: f.side,
+            max_qty: f.max_qty,
+            valid_on: to_date(f.valid_on, "first_order.valid_on")?,
+        }),
+        None => None,
+    };
+    let account_flat_confirmed_on = match raw.account_flat_confirmed_on {
+        Some(d) => Some(to_date(d, "account_flat_confirmed_on")?),
+        None => None,
+    };
+    Ok(OwnerFile {
+        stage: raw.stage,
+        strategy_allowlist: raw.strategy_allowlist,
+        account_flat_confirmed_on,
+        first_order,
+        validation_signoff: raw.validation_signoff,
+        alert_webhook_url: raw.alert_webhook_url,
+    })
 }
