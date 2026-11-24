@@ -64,6 +64,7 @@ struct SecretsFile {
 }
 
 fn load_from_file(path: &str) -> Result<ApiKeys, ConfigError> {
+    check_mode(path)?;
     let text = std::fs::read_to_string(path).map_err(|e| ConfigError::Io(e.to_string()))?;
     // Parse errors may quote file content, so report only the location-free kind.
     let file: SecretsFile = toml::from_str(&text)
@@ -75,4 +76,23 @@ fn load_from_file(path: &str) -> Result<ApiKeys, ConfigError> {
         key_id: Secret::new(file.key_id),
         secret_key: Secret::new(file.secret_key),
     })
+}
+
+/// Refuse a secrets file that group or others can read or write (R-042).
+#[cfg(unix)]
+fn check_mode(path: &str) -> Result<(), ConfigError> {
+    use std::os::unix::fs::PermissionsExt;
+    let meta = std::fs::metadata(path).map_err(|e| ConfigError::Io(e.to_string()))?;
+    let mode = meta.permissions().mode() & 0o777;
+    if mode & 0o077 != 0 {
+        return Err(ConfigError::InsecureSecretsFile(format!(
+            "{path} has mode {mode:o}; expected 600 or 400"
+        )));
+    }
+    Ok(())
+}
+
+#[cfg(not(unix))]
+fn check_mode(_path: &str) -> Result<(), ConfigError> {
+    Ok(())
 }
