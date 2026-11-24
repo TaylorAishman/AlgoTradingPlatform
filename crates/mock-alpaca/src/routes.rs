@@ -31,6 +31,17 @@ pub fn respond(req: &Recorded, state: &mut State) -> (u16, String) {
     if req.method == "POST" && req.path == "/v2/orders" {
         return submit(&req.body, state);
     }
+    if req.method == "DELETE" {
+        if let Some(id) = req.path.strip_prefix("/v2/orders/") {
+            if let Some(o) = state.orders.iter_mut().find(|o| o.id == id) {
+                if is_terminal(&o.status) {
+                    return (422, r#"{"message":"order is not cancelable"}"#.to_string());
+                }
+                o.status = "canceled".to_string();
+                return (204, String::new());
+            }
+        }
+    }
     if req.method == "GET" {
         match req.path.as_str() {
             "/v2/account" => {
@@ -79,6 +90,36 @@ pub fn respond(req: &Recorded, state: &mut State) -> (u16, String) {
                     .collect();
                 return (200, serde_json::Value::Array(entries).to_string());
             }
+            "/v2/orders" => {
+                let status = query_param(&req.query, "status").unwrap_or_else(|| "open".into());
+                let after = query_param(&req.query, "after")
+                    .and_then(|a| chrono::DateTime::parse_from_rfc3339(&a).ok());
+                let limit = query_param(&req.query, "limit")
+                    .and_then(|l| l.parse::<usize>().ok())
+                    .unwrap_or(100)
+                    .clamp(1, 500);
+                let mut matched: Vec<&Order> = state
+                    .orders
+                    .iter()
+                    .filter(|o| match status.as_str() {
+                        "all" => true,
+                        "closed" => is_terminal(&o.status),
+                        _ => !is_terminal(&o.status),
+                    })
+                    .filter(|o| {
+                        after.is_none_or(|a| {
+                            chrono::DateTime::parse_from_rfc3339(&o.submitted_at)
+                                .is_ok_and(|t| t > a)
+                        })
+                    })
+                    .collect();
+                matched.sort_by(|a, b| a.submitted_at.cmp(&b.submitted_at));
+                if query_param(&req.query, "direction").as_deref() != Some("asc") {
+                    matched.reverse();
+                }
+                let list: Vec<_> = matched.into_iter().take(limit).map(order_json).collect();
+                return (200, serde_json::Value::Array(list).to_string());
+            }
             "/v2/stocks/bars" => return bars(&req.query, state),
             "/v2/orders:by_client_order_id" => {
                 let wanted = req
@@ -116,6 +157,42 @@ pub fn respond(req: &Recorded, state: &mut State) -> (u16, String) {
         }
     }
     (404, r#"{"message":"not found"}"#.to_string())
+}
+
+/// The percent-decoded value of query parameter `key`.
+fn query_param(query: &str, key: &str) -> Option<String> {
+    let (_, raw) = query
+        .split('&')
+        .filter_map(|kv| kv.split_once('='))
+        .find(|(name, _)| *name == key)?;
+    let bytes = raw.as_bytes();
+    let mut out = Vec::with_capacity(bytes.len());
+    let mut i = 0;
+    while i < bytes.len() {
+        let hex = bytes
+            .get(i + 1..i + 3)
+            .and_then(|h| std::str::from_utf8(h).ok())
+            .and_then(|h| u8::from_str_radix(h, 16).ok());
+        match (bytes[i], hex) {
+            (b'%', Some(b)) => {
+                out.push(b);
+                i += 3;
+            }
+            (b, _) => {
+                out.push(b);
+                i += 1;
+            }
+        }
+    }
+    String::from_utf8(out).ok()
+}
+
+/// Whether an order status is final (the order is no longer open).
+fn is_terminal(status: &str) -> bool {
+    matches!(
+        status,
+        "filled" | "canceled" | "expired" | "rejected" | "replaced"
+    )
 }
 
 /// The order JSON shape served by the order routes.
