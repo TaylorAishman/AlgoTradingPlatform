@@ -3,7 +3,7 @@
 use std::collections::BTreeMap;
 
 use pt_core::money::{Money, Price};
-use pt_core::types::{OrderIntent, Positions, Symbol};
+use pt_core::types::{OrderIntent, Positions, Side, Symbol};
 use rust_decimal::Decimal;
 
 /// Configured risk limits.
@@ -21,6 +21,7 @@ pub struct RiskLimits {
 pub enum Rejection {
     NoEquity,
     OrderNotional,
+    WeightCap,
 }
 
 /// Orders split into approved and rejected (with the reason).
@@ -30,10 +31,11 @@ pub struct GateOutcome {
     pub rejected: Vec<(OrderIntent, Rejection)>,
 }
 
-/// Check each order against the limits. NoEquity is checked first.
+/// Check each order against the limits, in order: NoEquity, OrderNotional, WeightCap.
+/// Each order sees the position left by the orders approved before it.
 pub fn check_orders(
     orders: &[OrderIntent],
-    _positions: &Positions,
+    positions: &Positions,
     equity: Money,
     prices: &BTreeMap<Symbol, Price>,
     limits: &RiskLimits,
@@ -42,6 +44,8 @@ pub fn check_orders(
         approved: Vec::new(),
         rejected: Vec::new(),
     };
+    let mut running: BTreeMap<Symbol, i64> =
+        positions.iter().map(|(k, v)| (k.clone(), *v)).collect();
     for o in orders {
         if equity.0 <= Decimal::ZERO {
             out.rejected.push((o.clone(), Rejection::NoEquity));
@@ -51,9 +55,19 @@ pub fn check_orders(
         let notional = price.value() * Decimal::from(o.qty);
         if notional > limits.max_order_notional {
             out.rejected.push((o.clone(), Rejection::OrderNotional));
-        } else {
-            out.approved.push(o.clone());
+            continue;
         }
+        let delta = match o.side {
+            Side::Buy => o.qty as i64,
+            Side::Sell => -(o.qty as i64),
+        };
+        let after = running.get(&o.symbol).copied().unwrap_or(0) + delta;
+        if (price.value() * Decimal::from(after)).abs() > limits.max_weight * equity.0 {
+            out.rejected.push((o.clone(), Rejection::WeightCap));
+            continue;
+        }
+        running.insert(o.symbol.clone(), after);
+        out.approved.push(o.clone());
     }
     out
 }
