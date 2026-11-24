@@ -1,7 +1,10 @@
 //! Daily bars from the Alpaca market data host.
 
-use chrono::NaiveDate;
+use std::collections::BTreeMap;
+
+use chrono::{DateTime, NaiveDate};
 use rust_decimal::Decimal;
+use serde::Deserialize;
 
 use crate::error::AlpacaError;
 use crate::http::HttpClient;
@@ -35,7 +38,47 @@ pub fn daily_bars(
         adjustment,
         feed,
     );
-    // Parsing the body into bars is a later step.
-    let _body = http.get_data(&query)?;
-    Ok(Vec::new())
+    let body = http.get_data(&query)?;
+    parse_page(&body)
+}
+
+#[derive(Deserialize)]
+struct Page {
+    bars: Option<BTreeMap<String, Vec<RawBar>>>,
+}
+
+/// Prices are `Decimal` fields of a derived `Deserialize`, which reads a JSON number
+/// through the shortest round-trip text of its `f64` (architecture D-11). No arithmetic
+/// is done on the float.
+#[derive(Deserialize)]
+struct RawBar {
+    t: String,
+    o: Decimal,
+    h: Decimal,
+    l: Decimal,
+    c: Decimal,
+    v: u64,
+}
+
+fn parse_page(body: &str) -> Result<Vec<WireBar>, AlpacaError> {
+    let page: Page = serde_json::from_str(body).map_err(|e| AlpacaError::Parse(e.to_string()))?;
+    let mut out = Vec::new();
+    for (symbol, bars) in page.bars.unwrap_or_default() {
+        for b in bars {
+            let date = DateTime::parse_from_rfc3339(&b.t)
+                .map_err(|e| AlpacaError::Parse(format!("bar time {}: {e}", b.t)))?
+                .naive_utc()
+                .date();
+            out.push(WireBar {
+                symbol: symbol.clone(),
+                date,
+                open: b.o,
+                high: b.h,
+                low: b.l,
+                close: b.c,
+                volume: b.v,
+            });
+        }
+    }
+    Ok(out)
 }
