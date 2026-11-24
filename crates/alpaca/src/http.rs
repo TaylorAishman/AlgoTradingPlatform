@@ -12,6 +12,9 @@ use crate::limiter::{RateLimiter, Sleeper, SystemClock, ThreadSleeper};
 /// Waits before each retry after a 429 reply (R-085).
 const RATE_LIMIT_WAITS_SECS: [u64; 4] = [15, 30, 45, 60];
 
+/// Waits before each retry after a 5xx reply (R-086).
+const SERVER_ERROR_WAITS_SECS: [u64; 4] = [1, 2, 4, 8];
+
 /// Sends every request with the auth headers, after taking a rate limiter slot.
 pub struct HttpClient {
     endpoints: Endpoints,
@@ -72,12 +75,20 @@ impl HttpClient {
 
     fn get(&self, url: &str) -> Result<String, AlpacaError> {
         let mut retries = 0;
+        let mut server_retries = 0;
         loop {
             match self.get_once(url) {
                 Err(AlpacaError::RateLimited) if retries < RATE_LIMIT_WAITS_SECS.len() => {
                     self.sleeper
                         .sleep(Duration::from_secs(RATE_LIMIT_WAITS_SECS[retries]));
                     retries += 1;
+                }
+                Err(AlpacaError::Server { .. })
+                    if server_retries < SERVER_ERROR_WAITS_SECS.len() =>
+                {
+                    self.sleeper
+                        .sleep(Duration::from_secs(SERVER_ERROR_WAITS_SECS[server_retries]));
+                    server_retries += 1;
                 }
                 other => return other,
             }
