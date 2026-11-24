@@ -1,0 +1,17 @@
+[package]
+name = "pt-vector"
+description = "Independent vectorised calculator written from the accounting specification"
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+publish.workspace = true
+
+[lints]
+workspace = true
+
+[dependencies]
+chrono.workspace = true
+pt-core.workspace = true
+rust_decimal.workspace = true
+thiserror.workspace = true

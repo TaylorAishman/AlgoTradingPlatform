@@ -1,0 +1,20 @@
+[package]
+name = "pt-core"
+description = "Domain types: symbol, price, money, bar, orders, costs, signals, market views and clock"
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+publish.workspace = true
+
+[lints]
+workspace = true
+
+[dependencies]
+chrono.workspace = true
+rust_decimal.workspace = true
+serde.workspace = true
+thiserror.workspace = true
+
+[dev-dependencies]
+serde_json.workspace = true
