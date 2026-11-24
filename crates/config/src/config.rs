@@ -283,5 +283,37 @@ pub struct Config {
 
 /// Parse configuration text.
 pub fn parse(toml_text: &str) -> Result<Config, ConfigError> {
-    toml::from_str(toml_text).map_err(|e| ConfigError::Parse(e.to_string()))
+    let cfg: Config = toml::from_str(toml_text).map_err(|e| ConfigError::Parse(e.to_string()))?;
+    validate(&cfg)?;
+    Ok(cfg)
+}
+
+/// Check cross-field and range rules that the types cannot express.
+fn validate(cfg: &Config) -> Result<(), ConfigError> {
+    let max_gross = cfg.sizing.max_gross;
+    if max_gross <= Decimal::ZERO || max_gross > Decimal::ONE {
+        return Err(ConfigError::Invalid(format!(
+            "sizing.max_gross must be in (0, 1], got {max_gross}"
+        )));
+    }
+    let feed = cfg.data.feed.as_str();
+    let imported = feed.strip_prefix("csv:").is_some_and(|n| !n.is_empty());
+    if feed != "sip" && feed != "iex" && !imported {
+        return Err(ConfigError::Invalid(format!(
+            "data.feed must be \"sip\", \"iex\" or \"csv:<name>\", got \"{feed}\""
+        )));
+    }
+    if feed == "iex" {
+        if !cfg.cost.research.impact_coeff.is_zero() {
+            return Err(ConfigError::Invalid(
+                "cost.research.impact_coeff must be 0 when data.feed is \"iex\"".into(),
+            ));
+        }
+        if !cfg.cost.shadow.impact_coeff.is_zero() {
+            return Err(ConfigError::Invalid(
+                "cost.shadow.impact_coeff must be 0 when data.feed is \"iex\"".into(),
+            ));
+        }
+    }
+    Ok(())
 }
