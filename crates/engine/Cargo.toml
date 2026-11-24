@@ -1,0 +1,24 @@
+[package]
+name = "pt-engine"
+description = "Cost functions, the book, the shared decision function, the simulated broker and the backtest loop"
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+publish.workspace = true
+
+[lints]
+workspace = true
+
+[dependencies]
+chrono.workspace = true
+pt-calendar.workspace = true
+pt-config.workspace = true
+pt-core.workspace = true
+pt-portfolio.workspace = true
+pt-risk.workspace = true
+pt-strategy.workspace = true
+rust_decimal.workspace = true
+serde.workspace = true
+serde_json.workspace = true
+thiserror.workspace = true

@@ -587,6 +587,23 @@ dependencies = [
 ]
 
 [[package]]
+name = "pt-engine"
+version = "0.1.0"
+dependencies = [
+ "chrono",
+ "pt-calendar",
+ "pt-config",
+ "pt-core",
+ "pt-portfolio",
+ "pt-risk",
+ "pt-strategy",
+ "rust_decimal",
+ "serde",
+ "serde_json",
+ "thiserror",
+]
+
+[[package]]
 name = "pt-gate"
 version = "0.1.0"
 dependencies = [
@@ -609,6 +626,23 @@ dependencies = [
 ]
 
 [[package]]
+name = "pt-portfolio"
+version = "0.1.0"
+dependencies = [
+ "pt-core",
+ "rust_decimal",
+ "thiserror",
+]
+
+[[package]]
+name = "pt-risk"
+version = "0.1.0"
+dependencies = [
+ "pt-core",
+ "rust_decimal",
+]
+
+[[package]]
 name = "pt-stats"
 version = "0.1.0"
 dependencies = [
@@ -625,6 +659,35 @@ dependencies = [
  "rusqlite",
  "rust_decimal",
  "tempfile",
+ "thiserror",
+]
+
+[[package]]
+name = "pt-strategy"
+version = "0.1.0"
+dependencies = [
+ "chrono",
+ "pt-calendar",
+ "pt-core",
+ "thiserror",
+]
+
+[[package]]
+name = "pt-validate"
+version = "0.1.0"
+dependencies = [
+ "chrono",
+ "pt-calendar",
+ "pt-config",
+ "pt-core",
+ "pt-data",
+ "pt-engine",
+ "pt-stats",
+ "pt-store",
+ "pt-strategy",
+ "pt-vector",
+ "rust_decimal",
+ "sha2",
  "thiserror",
 ]
 
