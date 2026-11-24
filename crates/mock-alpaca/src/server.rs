@@ -37,13 +37,25 @@ impl MockAlpaca {
                     };
                     let mut body = String::new();
                     let _ = request.as_reader().read_to_string(&mut body);
+                    let authed = ["APCA-API-KEY-ID", "APCA-API-SECRET-KEY"]
+                        .iter()
+                        .all(|name| {
+                            request
+                                .headers()
+                                .iter()
+                                .any(|h| h.field.equiv(name) && !h.value.as_str().is_empty())
+                        });
                     let rec = Recorded {
                         method: request.method().to_string(),
                         path,
                         query,
                         body,
                     };
-                    let (status, text) = routes::respond(&rec);
+                    let (status, text) = if authed {
+                        routes::respond(&rec)
+                    } else {
+                        routes::unauthorized()
+                    };
                     state
                         .lock()
                         .unwrap_or_else(|e| e.into_inner())
