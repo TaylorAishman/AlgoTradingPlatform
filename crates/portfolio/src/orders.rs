@@ -39,7 +39,8 @@ pub fn target_shares(
 
 /// Orders that trade the difference between current and target shares.
 ///
-/// One leg-1 order per symbol whose share count changes, sorted by symbol. A held symbol
+/// One leg-1 order per symbol whose share count changes, sorted by symbol. A sign flip is
+/// two orders: leg 1 closes to zero, leg 2 opens the new side. A held symbol
 /// absent from `target` is closed to zero.
 /// The side follows the sign of `target - current`; the reference price comes from `prices`.
 pub fn plan_orders(
@@ -63,9 +64,20 @@ pub fn plan_orders(
             .get(symbol)
             .ok_or_else(|| PortfolioError::MissingPrice(symbol.as_str().to_string()))?;
         let side = if diff > 0 { Side::Buy } else { Side::Sell };
-        let order = OrderIntent::new(symbol.clone(), side, diff.unsigned_abs(), 1, price)
-            .map_err(|e| PortfolioError::Invalid(e.to_string()))?;
-        out.push(order);
+        let flips = (have > 0 && want < 0) || (have < 0 && want > 0);
+        let legs: [(u64, u8); 2] = if flips {
+            [(have.unsigned_abs(), 1), (want.unsigned_abs(), 2)]
+        } else {
+            [(diff.unsigned_abs(), 1), (0, 0)]
+        };
+        for (qty, leg) in legs {
+            if qty == 0 {
+                continue;
+            }
+            let order = OrderIntent::new(symbol.clone(), side, qty, leg, price)
+                .map_err(|e| PortfolioError::Invalid(e.to_string()))?;
+            out.push(order);
+        }
     }
     Ok(out)
 }
