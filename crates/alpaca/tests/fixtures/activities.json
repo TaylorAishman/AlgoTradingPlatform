@@ -1,0 +1,1 @@
+[{"id":"20261201::a1","activity_type":"FILL","order_id":"b1","symbol":"SPY","side":"buy","qty":"4","price":"472.11","transaction_time":"2026-12-01T14:30:01Z","type":"partial_fill"},{"id":"20261201::a2","activity_type":"FILL","order_id":"b1","symbol":"SPY","side":"buy","qty":"6","price":"472.5","transaction_time":"2026-12-01T14:31:02Z","type":"fill"}]
