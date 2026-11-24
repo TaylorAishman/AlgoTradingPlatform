@@ -22,6 +22,21 @@ impl Price {
         }
     }
 
+    /// Convert a float to the decimal it prints as (shortest round-trip form).
+    ///
+    /// Non-finite input is `NotFinite`; zero and negatives are `NonPositivePrice`.
+    pub fn from_f64_shortest(x: f64) -> Result<Self, CoreError> {
+        if !x.is_finite() {
+            return Err(CoreError::NotFinite);
+        }
+        if x <= 0.0 {
+            return Err(CoreError::NonPositivePrice);
+        }
+        let text = format!("{x:e}");
+        let d = Decimal::from_scientific(&text).map_err(|_| CoreError::NotFinite)?;
+        Price::new(d)
+    }
+
     /// The underlying decimal.
     pub fn value(&self) -> Decimal {
         self.0
