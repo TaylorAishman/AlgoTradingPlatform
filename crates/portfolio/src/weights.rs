@@ -35,6 +35,7 @@ fn to_decimal(x: f64) -> Decimal {
 /// `u_i = signal_i / vol_i`, `w_i = u_i * target_vol / sqrt(u' C u)`, each clamped to
 /// `[-max_weight, max_weight]`, then all scaled down together if gross exceeds `max_gross`,
 /// rounded to 6 places.
+/// Symbols in `risk.ineligible` are dropped from the sized set and get weight 0.
 /// A short signal in a symbol not in `shortable` is set to zero before scaling.
 /// A symbol without a positive volatility gets weight 0. If the portfolio volatility is
 /// zero, or a covariance entry between two sized symbols is missing, every weight is 0:
@@ -50,6 +51,10 @@ pub fn target_weights(
     let u: Vec<(&Symbol, f64)> = signals
         .iter()
         .filter_map(|(s, &sig)| {
+            // An ineligible symbol is dropped before vol and covariance, and stays at zero.
+            if risk.ineligible.contains_key(s) {
+                return None;
+            }
             // A short in a symbol that cannot be shorted is flat, before any scaling.
             if sig < 0.0 && !shortable.contains(s) {
                 return None;
