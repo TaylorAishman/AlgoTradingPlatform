@@ -1,0 +1,192 @@
+# Example paper-trader configuration. Omitted keys take their defaults.
+
+[strategy]
+id = "tsmom-v1"
+
+[data]
+feed = "sip"
+
+[[universe]]
+symbol = "SPY"
+asset_class = "equity"
+shortable = true
+
+[[universe]]
+symbol = "QQQ"
+asset_class = "equity"
+shortable = true
+
+[[universe]]
+symbol = "IWM"
+asset_class = "equity"
+shortable = true
+
+[[universe]]
+symbol = "MDY"
+asset_class = "equity"
+shortable = true
+
+[[universe]]
+symbol = "EFA"
+asset_class = "equity"
+shortable = true
+
+[[universe]]
+symbol = "EEM"
+asset_class = "equity"
+shortable = true
+
+[[universe]]
+symbol = "VGK"
+asset_class = "equity"
+shortable = true
+
+[[universe]]
+symbol = "EWJ"
+asset_class = "equity"
+shortable = true
+
+[[universe]]
+symbol = "EWU"
+asset_class = "equity"
+shortable = true
+
+[[universe]]
+symbol = "EWG"
+asset_class = "equity"
+shortable = true
+
+[[universe]]
+symbol = "EWC"
+asset_class = "equity"
+shortable = true
+
+[[universe]]
+symbol = "EWA"
+asset_class = "equity"
+shortable = true
+
+[[universe]]
+symbol = "EWZ"
+asset_class = "equity"
+shortable = true
+
+[[universe]]
+symbol = "FXI"
+asset_class = "equity"
+shortable = true
+
+[[universe]]
+symbol = "INDA"
+asset_class = "equity"
+shortable = true
+
+[[universe]]
+symbol = "SHY"
+asset_class = "treasury"
+shortable = true
+
+[[universe]]
+symbol = "IEI"
+asset_class = "treasury"
+shortable = true
+
+[[universe]]
+symbol = "IEF"
+asset_class = "treasury"
+shortable = true
+
+[[universe]]
+symbol = "TLH"
+asset_class = "treasury"
+shortable = true
+
+[[universe]]
+symbol = "TLT"
+asset_class = "treasury"
+shortable = true
+
+[[universe]]
+symbol = "TIP"
+asset_class = "treasury"
+shortable = true
+
+[[universe]]
+symbol = "LQD"
+asset_class = "credit"
+shortable = true
+
+[[universe]]
+symbol = "HYG"
+asset_class = "credit"
+shortable = true
+
+[[universe]]
+symbol = "EMB"
+asset_class = "credit"
+shortable = true
+
+[[universe]]
+symbol = "GLD"
+asset_class = "commodity"
+shortable = true
+
+[[universe]]
+symbol = "SLV"
+asset_class = "commodity"
+shortable = true
+
+[[universe]]
+symbol = "DBC"
+asset_class = "commodity"
+shortable = true
+
+[[universe]]
+symbol = "USO"
+asset_class = "commodity"
+shortable = true
+
+[[universe]]
+symbol = "UNG"
+asset_class = "commodity"
+shortable = true
+
+[[universe]]
+symbol = "DBA"
+asset_class = "commodity"
+shortable = true
+
+[[universe]]
+symbol = "UUP"
+asset_class = "currency"
+shortable = true
+
+[[universe]]
+symbol = "FXE"
+asset_class = "currency"
+shortable = true
+
+[[universe]]
+symbol = "FXY"
+asset_class = "currency"
+shortable = true
+
+[[universe]]
+symbol = "FXB"
+asset_class = "currency"
+shortable = true
+
+[[universe]]
+symbol = "FXA"
+asset_class = "currency"
+shortable = true
+
+[[universe]]
+symbol = "VNQ"
+asset_class = "real_estate"
+shortable = true
+
+[[universe]]
+symbol = "RWX"
+asset_class = "real_estate"
+shortable = true

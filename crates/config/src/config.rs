@@ -290,6 +290,13 @@ pub fn parse(toml_text: &str) -> Result<Config, ConfigError> {
     Ok(cfg)
 }
 
+/// Read and parse the configuration file at `path`.
+pub fn load(path: &std::path::Path) -> Result<Config, ConfigError> {
+    let text = std::fs::read_to_string(path)
+        .map_err(|e| ConfigError::Io(format!("{}: {e}", path.display())))?;
+    parse(&text)
+}
+
 /// Check cross-field and range rules that the types cannot express.
 fn validate(cfg: &Config) -> Result<(), ConfigError> {
     let max_gross = cfg.sizing.max_gross;
