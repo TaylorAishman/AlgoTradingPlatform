@@ -56,6 +56,9 @@ impl Store {
     }
 
     fn init(conn: Connection) -> Result<Store, StoreError> {
+        // journal_mode returns a row; in-memory databases report "memory".
+        conn.pragma_update(None, "journal_mode", "WAL")?;
+        conn.pragma_update(None, "foreign_keys", "ON")?;
         let mut store = Store { conn };
         store.migrate()?;
         Ok(store)
