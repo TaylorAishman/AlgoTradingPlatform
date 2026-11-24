@@ -1,4 +1,7 @@
-//! Capability checks by operating stage. Anything not in the table is denied.
+//! Capability checks by operating stage and order authorisation. Anything not
+//! explicitly allowed is denied.
+
+use chrono::NaiveDate;
 
 use crate::error::GateError;
 use crate::owner::{OwnerFile, Stage};
@@ -11,6 +14,44 @@ pub enum Capability {
     RecordDryRun,
     SubmitOrder,
     CancelOrder,
+}
+
+/// The fields of an order that a permit is bound to.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct OrderSummary {
+    pub client_order_id: String,
+    pub symbol: String,
+    pub side: String,
+    pub qty: u64,
+}
+
+/// What the caller knows at the moment it asks to send an order.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct AuthContext {
+    pub strategy_id: String,
+    pub today: NaiveDate,
+    pub halted: bool,
+    pub risk_reducing: bool,
+    pub is_first_order: bool,
+    pub first_order_already_sent: bool,
+}
+
+/// Proof that the gate authorised exactly one order. Only `Gate::authorize`
+/// can create one: the field is private and there is no public constructor.
+#[derive(Debug)]
+pub struct OrderPermit {
+    order: OrderSummary,
+}
+
+impl OrderPermit {
+    /// Whether `o` is the order this permit was issued for: client order id,
+    /// symbol, side and quantity must all be equal.
+    pub fn matches(&self, o: &OrderSummary) -> bool {
+        self.order.client_order_id == o.client_order_id
+            && self.order.symbol == o.symbol
+            && self.order.side == o.side
+            && self.order.qty == o.qty
+    }
 }
 
 /// The gate: holds what the owner has approved.
@@ -50,5 +91,27 @@ impl Gate {
         } else {
             Err(GateError::StageForbids)
         }
+    }
+
+    /// Authorise one order. Fails closed: below `FirstOrder` the stage forbids
+    /// it, and in `Paper` the strategy must be on the allowlist exactly.
+    /// The `FirstOrder` stage refuses every order until its rules exist.
+    pub fn authorize(
+        &self,
+        order: &OrderSummary,
+        ctx: &AuthContext,
+    ) -> Result<OrderPermit, GateError> {
+        match self.owner.stage {
+            Stage::Paper => {}
+            Stage::Backtest | Stage::Ingest | Stage::DryRun | Stage::FirstOrder => {
+                return Err(GateError::StageForbids);
+            }
+        }
+        if !self.owner.strategy_allowlist.contains(&ctx.strategy_id) {
+            return Err(GateError::StrategyNotAllowed);
+        }
+        Ok(OrderPermit {
+            order: order.clone(),
+        })
     }
 }
