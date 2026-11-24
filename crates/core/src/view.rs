@@ -2,6 +2,7 @@
 
 use crate::types::{Bar, Symbol};
 use chrono::NaiveDate;
+use std::collections::BTreeMap;
 
 pub trait HistoryView {
     /// Adjusted closes for sessions on or before `asof`, oldest first, at most `max` of them.
@@ -13,4 +14,40 @@ pub trait MarketView: HistoryView {
     fn exec_bar(&self, symbol: &Symbol, date: NaiveDate) -> Option<Bar>;
     /// Mean volume in shares over the `sessions` sessions before `asof`.
     fn adv_shares(&self, symbol: &Symbol, asof: NaiveDate, sessions: usize) -> Option<f64>;
+}
+
+/// In-memory view for tests and the vector cross-check.
+#[derive(Debug, Clone, Default)]
+pub struct MemoryView {
+    adj: BTreeMap<Symbol, BTreeMap<NaiveDate, f64>>,
+}
+
+impl MemoryView {
+    pub fn new() -> MemoryView {
+        MemoryView::default()
+    }
+
+    /// Record an adjusted close; a later push for the same date replaces the earlier one.
+    pub fn push_adj_close(&mut self, symbol: &Symbol, date: NaiveDate, close: f64) {
+        self.adj
+            .entry(symbol.clone())
+            .or_default()
+            .insert(date, close);
+    }
+}
+
+impl HistoryView for MemoryView {
+    fn adj_closes(&self, symbol: &Symbol, asof: NaiveDate, max: usize) -> Vec<(NaiveDate, f64)> {
+        let Some(series) = self.adj.get(symbol) else {
+            return Vec::new();
+        };
+        let mut out: Vec<(NaiveDate, f64)> = series
+            .range(..=asof)
+            .rev()
+            .take(max)
+            .map(|(d, c)| (*d, *c))
+            .collect();
+        out.reverse();
+        out
+    }
 }
