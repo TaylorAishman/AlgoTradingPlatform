@@ -51,3 +51,47 @@ pub fn account(http: &HttpClient) -> Result<WireAccount, AlpacaError> {
         account_blocked: flag("account_blocked")?,
     })
 }
+
+/// One open position: signed whole shares (long positive, short negative).
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct WirePosition {
+    pub symbol: String,
+    pub qty: i64,
+}
+
+/// GET /v2/positions on the trading base URL.
+pub fn positions(http: &HttpClient) -> Result<Vec<WirePosition>, AlpacaError> {
+    let body = http.get_trading("/v2/positions")?;
+    let items: Vec<serde_json::Value> =
+        serde_json::from_str(&body).map_err(|e| AlpacaError::Parse(e.to_string()))?;
+    items.iter().map(parse_position).collect()
+}
+
+fn parse_position(v: &serde_json::Value) -> Result<WirePosition, AlpacaError> {
+    let text = |k: &str| -> Result<&str, AlpacaError> {
+        v.get(k)
+            .and_then(|x| x.as_str())
+            .ok_or_else(|| AlpacaError::Parse(format!("position field {k} missing")))
+    };
+    let symbol = text("symbol")?.to_string();
+    let raw = text("qty")?;
+    let dec = Decimal::from_str(raw)
+        .map_err(|e| AlpacaError::Parse(format!("position {symbol} qty {raw}: {e}")))?;
+    if !dec.fract().is_zero() {
+        return Err(AlpacaError::Parse(format!(
+            "position {symbol} has a fractional qty {raw}"
+        )));
+    }
+    let whole = i64::try_from(dec.abs().trunc())
+        .map_err(|e| AlpacaError::Parse(format!("position {symbol} qty {raw}: {e}")))?;
+    let qty = match text("side")? {
+        "long" => whole,
+        "short" => -whole,
+        other => {
+            return Err(AlpacaError::Parse(format!(
+                "position {symbol} has unknown side {other}"
+            )))
+        }
+    };
+    Ok(WirePosition { symbol, qty })
+}
