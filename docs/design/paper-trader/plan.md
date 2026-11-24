@@ -135,7 +135,11 @@ How to read the tables:
 | C02 | secrets | Load API keys from the environment map | R-041 | sonnet | crates/config/src/secrets.rs, crates/config/tests/api_keys_env.rs | cargo test -p pt-config --test api_keys_env |
 | C03 | secrets | Load API keys from the file named by PT_SECRETS_FILE | R-041 | sonnet | crates/config/src/secrets.rs, crates/config/tests/api_keys_file.rs | cargo test -p pt-config --test api_keys_file |
 | C04 | secrets | Refuse a secrets file readable by group or others | R-042 | sonnet | crates/config/src/secrets.rs, crates/config/tests/api_keys_mode.rs | cargo test -p pt-config --test api_keys_mode |
-| C05 | config | Add the Config structs and parse with the defaults of architecture 5.3 | R-031 | sonnet | crates/config/src/config.rs, crates/config/tests/defaults.rs | cargo test -p pt-config --test defaults |
+| C12 | config | Add parse for a Config that holds only the universe of Instruments with the six asset classes | R-031 | sonnet | crates/config/src/config.rs, crates/config/tests/parse_universe.rs | cargo test -p pt-config --test parse_universe |
+| C13 | config | Add the run, data, strategy and stats sections (strings, integers and one date) with their architecture 5.3 defaults | R-031 | sonnet | crates/config/src/config.rs, crates/config/tests/defaults_plain.rs | cargo test -p pt-config --test defaults_plain |
+| C14 | config | Add the sizing and risk sections, holding fractional values as exact Decimals read from TOML numbers | R-031 | sonnet | crates/config/src/config.rs, crates/config/tests/defaults_limits.rs | cargo test -p pt-config --test defaults_limits |
+| C15 | config | Add the cost section as two CostSpec values whose research and shadow keys default separately | R-031 | sonnet | crates/config/src/config.rs, crates/config/tests/defaults_cost.rs | cargo test -p pt-config --test defaults_cost |
+| C05 | config | Add the signoff section, completing the defaults of architecture 5.3 | R-031 | sonnet | crates/config/src/config.rs, crates/config/tests/defaults.rs | cargo test -p pt-config --test defaults |
 | C06 | config | Reject unknown keys by name | R-032, R-033 | sonnet | crates/config/src/config.rs, crates/config/tests/unknown_keys.rs | cargo test -p pt-config --test unknown_keys |
 | C07 | config | Validate the gross cap, the feed name and impact-off-for-IEX | R-034, R-035, R-036 | sonnet | crates/config/src/config.rs, crates/config/tests/validation_limits.rs | cargo test -p pt-config --test validation_limits |
 | C08 | config | Validate the universe | R-037 | sonnet | crates/config/src/config.rs, crates/config/tests/validation_universe.rs | cargo test -p pt-config --test validation_universe |
@@ -428,7 +432,7 @@ Wave | Chains that can run together
 --- | ---
 1 | workspace (6)
 2 | core-types (6), core-state (2), calendar (4), secrets (4), stats-descriptive (5), stats-normal (2), stats-pbo (6), alpaca-endpoints (4), mock-reference (6), store-codec (1), store-schema (5), gate-owner (4), strategy-vol (3), ops-logging (1), ops-pnl (2), live-lock (1), cli-deploy (1)
-3 | core-view (3), calendar-months (3), config (6), stats-dsr (4), vector (4), alpaca-http (5), mock-orders (6), store-market (5), store-orders (4), store-shadow (1), store-ops (5), gate-authorize (6), gate-status (1), portfolio-orders (6), risk (6), engine-cost (4), live-ids (2)
+3 | core-view (3), calendar-months (3), config (10), stats-dsr (4), vector (4), alpaca-http (5), mock-orders (6), store-market (5), store-orders (4), store-shadow (1), store-ops (5), gate-authorize (6), gate-status (1), portfolio-orders (6), risk (6), engine-cost (4), live-ids (2)
 4 | config-hash (1), alpaca-data (5), alpaca-account (4), alpaca-orders-read (3), store-ledger (3), strategy-risk (4), strategy-tsmom (6), portfolio-weights (5), engine-sim (5), data-view (3), data-import (3), ops-alerts (4)
 5 | alpaca-write (3), store-append-only (1), strategy-benchmark (1), engine-decide (6), engine-sim-guards (4), data-quality (2), data-reference (2), data-doctor (2), ops-report (6), live-context (2), shadow-slippage (2), cli-base (6)
 6 | engine-backtest (4), data-ingest (6), data-universe (2), live-submit (5), live-reconcile (5), live-snapshots (3), shadow-daily (3), shadow-replay (3), cli-import (2)
@@ -441,7 +445,7 @@ Wave | Chains that can run together
 13 | cli-ops (4)
 14 | cli-e2e (2)
 
-87 chains, 313 steps. Widest wave: 17 chains. Longest chain: 6 steps.
+87 chains, 317 steps. Widest wave: 17 chains. Longest chain: 10 steps.
 
 What the waves mean in practice:
 
@@ -463,7 +467,7 @@ One line per chain: what to look for when reviewing it.
 - `calendar`: Check strictness (next and previous exclude the date itself) and that a bad session list cannot construct a calendar.
 - `calendar-months`: A month end exists only when a later session in another month is known; check the last month of the calendar is not treated as ended.
 - `secrets`: Search the diff for any path by which a secret value could reach `Debug`, `Display` or an error message.
-- `config`: Check the defaults against the TOML block in architecture 5.3 and that no key can name an endpoint.
+- `config`: Check the defaults against the TOML block in architecture 5.3 and that no key can name an endpoint. C12 to C05 build `parse` one section at a time, then C06 to C10 add the rules; no step should parse a number by hand (see Replans).
 - `config-hash`: The hash must come from the parsed values in a fixed order, not from the file text.
 - `stats-descriptive`: Check divisors: sample standard deviation uses n - 1, skewness and kurtosis use population moments.
 - `stats-normal`: Check accuracy in the tails, where the Deflated Sharpe Ratio uses the inverse.
@@ -543,3 +547,38 @@ One line per chain: what to look for when reviewing it.
 - `cli-live`: Check the exit codes 0, 1, 2 and 3 and that the report is written on every path except a held lock.
 - `cli-ops`: Destructive commands need `--yes`; `halt status` exits 2 while a halt is active.
 - `cli-e2e`: These two tests are the acceptance of the whole design. Any source change in this chain is a bug fix elsewhere: read it as one.
+
+## Replans
+
+### config, replan 1: C05 was too big
+
+C05 ("Add the Config structs and parse with the defaults of architecture 5.3") came out as one commit of 459 lines. It is now five steps, C12 to C15 and then C05, each adding one slice of the config to `parse`. C06 to C10 are unchanged. Requirements and architecture are unchanged.
+
+Why it was big, and what is true instead:
+
+- About half of the code was a hand-written reader for decimals, written in the belief that `rust_decimal` had no serde support here. It has: the `serde` feature is one of `rust_decimal`'s defaults and is in `Cargo.lock` (1.43.0). `Decimal` already implements `Deserialize` and reads a TOML integer, float or string. A plain `#[derive(Deserialize)]` field of type `Decimal` is all that is needed; write no `deserialize_with` helper for numbers.
+- A TOML float reaches `Decimal` through its shortest round-trip decimal text, never through binary arithmetic, so `max_gross = 1.01` is exactly 1.01 and `target_vol = 0.10` is exactly 0.1. This is the rule of architecture D-11. Checked against the locked versions for the literals in architecture 5.3 and requirement R-034.
+- `chrono` has no serde feature here, and none is needed. `data.start` is a quoted string in architecture 5.3: read it as a string and parse it as a `NaiveDate` in one small private helper.
+- No step in this chain edits `Cargo.toml` or `Cargo.lock`. The rule that only the `workspace` chain touches them stands.
+- The research and shadow cost tables differ only in their defaults. Read both through one private table whose four keys are optional, and lay it over the research or the shadow default. Do not write one reader per table.
+
+Money in the config file is a bare TOML number, as in the block in architecture 5.3 and the checks of R-034 and R-040. It is not a quoted string.
+
+Field types, which architecture 5.3 leaves open and the tests of these steps share:
+
+- `db_path`, `output_dir`, `feed`, `id` and `risk_free_symbol` are `String`.
+- `start` is a `NaiveDate`.
+- Counts, day lengths and `lookback_months` entries are unsigned integers.
+- Every value written with a fraction in architecture 5.3, every `_bps` value, and `max_order_notional` are `Decimal`. `params_from_config` (K05) converts to `f64` where the strategy wants floats.
+- `cost.research` and `cost.shadow` are `pt_core` `CostSpec` values.
+- Decimal equality ignores trailing zeros (`0.10 == 0.1`), but the printed text does not. Anything that prints a decimal to compare or hash it (C11) must normalise it first.
+
+Tests for C12 to C15:
+
+- Each goes through `pt_config::config::parse` with a config holding one `[[universe]]` entry, as R-031 states it, and asserts only the keys its step names.
+- Compare values through their printed text, as `crates/config/tests/defaults.rs` does, so no test pins a type beyond the list above.
+- C14 also proves exactness: `max_gross = 1.01`, `target_vol = 0.11` and `max_order_notional = 25000` read back equal to the decimals `1.01`, `0.11` and `25000`.
+- C15 also proves that a table with one key set keeps the other three at that table's own defaults: `[cost.shadow]` with only `spread_bps = 10` leaves `impact_coeff` and `borrow_bps_annual` at 0, and leaves `cost.research` untouched.
+- `crates/config/tests/defaults.rs` (written and locked before this replan) is the acceptance test of C05 and of R-031 as a whole. It cannot compile before C05, so it must stay out of the worktree until then.
+
+The chain is ten steps long. Every step writes `crates/config/src/config.rs`, so no part of it can run beside another, and moving the later steps to a new chain would change what the chains listing `config` under After wait for.
