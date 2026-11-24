@@ -63,6 +63,14 @@ impl Store {
 
     fn migrate(&mut self) -> Result<(), StoreError> {
         let current = self.schema_version()?;
+        let supported =
+            i64::try_from(MIGRATIONS.len()).map_err(|e| StoreError::Sql(e.to_string()))?;
+        if current > supported {
+            return Err(StoreError::SchemaTooNew {
+                found: current,
+                supported,
+            });
+        }
         for (i, sql) in MIGRATIONS.iter().enumerate() {
             let version = i64::try_from(i + 1).map_err(|e| StoreError::Sql(e.to_string()))?;
             if version <= current {
