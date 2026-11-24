@@ -1,0 +1,44 @@
+[package]
+name = "pt-cli"
+description = "The trader binary: argument parsing and wiring only"
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+publish.workspace = true
+
+[[bin]]
+name = "trader"
+path = "src/main.rs"
+
+[lints]
+workspace = true
+
+[dependencies]
+anyhow.workspace = true
+chrono.workspace = true
+clap.workspace = true
+pt-alpaca.workspace = true
+pt-calendar.workspace = true
+pt-config.workspace = true
+pt-core.workspace = true
+pt-data.workspace = true
+pt-engine.workspace = true
+pt-gate.workspace = true
+pt-live.workspace = true
+pt-ops.workspace = true
+pt-portfolio.workspace = true
+pt-risk.workspace = true
+pt-shadow.workspace = true
+pt-stats.workspace = true
+pt-store.workspace = true
+pt-strategy.workspace = true
+pt-validate.workspace = true
+pt-vector.workspace = true
+rust_decimal.workspace = true
+serde_json.workspace = true
+
+[dev-dependencies]
+pt-mock-alpaca.workspace = true
+serde_json.workspace = true
+tempfile.workspace = true

@@ -1,0 +1,28 @@
+[package]
+name = "pt-shadow"
+description = "Decision replay, the daily shadow simulation, slippage, fidelity metrics and the sign-off evaluation"
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+publish.workspace = true
+
+[lints]
+workspace = true
+
+[dependencies]
+chrono.workspace = true
+pt-calendar.workspace = true
+pt-config.workspace = true
+pt-core.workspace = true
+pt-data.workspace = true
+pt-engine.workspace = true
+pt-stats.workspace = true
+pt-store.workspace = true
+pt-strategy.workspace = true
+rust_decimal.workspace = true
+serde_json.workspace = true
+thiserror.workspace = true
+
+[dev-dependencies]
+tempfile.workspace = true
