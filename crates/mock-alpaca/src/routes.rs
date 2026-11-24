@@ -2,7 +2,7 @@
 
 use serde_json::json;
 
-use crate::state::{Order, Recorded, State};
+use crate::state::{fmt_dec, parse_dec, Order, Recorded, State};
 
 /// Double a non-negative decimal string exactly (buying power is cash times the
 /// fixed multiplier of 2). Falls back to the input if it is not a plain decimal.
@@ -120,6 +120,34 @@ pub fn respond(req: &Recorded, state: &mut State) -> (u16, String) {
                 let list: Vec<_> = matched.into_iter().take(limit).map(order_json).collect();
                 return (200, serde_json::Value::Array(list).to_string());
             }
+            "/v2/positions" => {
+                let list: Vec<_> = state
+                    .positions
+                    .iter()
+                    .map(|(sym, q)| json!({"symbol": sym, "qty": fmt_dec(*q)}))
+                    .collect();
+                return (200, serde_json::Value::Array(list).to_string());
+            }
+            "/v2/account/activities/FILL" => {
+                let list: Vec<_> = state
+                    .activities
+                    .iter()
+                    .map(|a| {
+                        json!({
+                            "id": a.id,
+                            "order_id": a.order_id,
+                            "symbol": a.symbol,
+                            "side": a.side,
+                            "qty": a.qty,
+                            "price": a.price,
+                            "transaction_time": a.transaction_time,
+                            "type": a.kind,
+                            "activity_type": "FILL",
+                        })
+                    })
+                    .collect();
+                return (200, serde_json::Value::Array(list).to_string());
+            }
             "/v2/stocks/bars" => return bars(&req.query, state),
             "/v2/orders:by_client_order_id" => {
                 let wanted = req
@@ -188,7 +216,7 @@ fn query_param(query: &str, key: &str) -> Option<String> {
 }
 
 /// Whether an order status is final (the order is no longer open).
-fn is_terminal(status: &str) -> bool {
+pub(crate) fn is_terminal(status: &str) -> bool {
     matches!(
         status,
         "filled" | "canceled" | "expired" | "rejected" | "replaced"
@@ -208,14 +236,8 @@ fn order_json(o: &Order) -> serde_json::Value {
         "status": o.status,
         "submitted_at": o.submitted_at,
         "filled_qty": o.filled_qty,
+        "filled_avg_price": o.filled_avg_price,
     })
-}
-
-/// Whether `s` is a plain non-negative decimal such as `10` or `0.5`.
-fn is_plain_decimal(s: &str) -> bool {
-    let (int, frac) = s.split_once('.').unwrap_or((s, ""));
-    let digits = |p: &str| p.bytes().all(|b| b.is_ascii_digit());
-    !int.is_empty() && digits(int) && digits(frac)
 }
 
 /// Accept a new order, or refuse it with 422 if malformed or a duplicate client order id.
@@ -234,7 +256,7 @@ fn submit(body: &str, state: &mut State) -> (u16, String) {
     ) else {
         return refuse("missing order field");
     };
-    if !is_plain_decimal(&qty) {
+    if parse_dec(&qty).is_none() {
         return refuse("invalid order qty");
     }
     if side != "buy" && side != "sell" {
@@ -261,6 +283,8 @@ fn submit(body: &str, state: &mut State) -> (u16, String) {
         status: "accepted".to_string(),
         submitted_at: state.stamp(seq),
         filled_qty: "0".to_string(),
+        filled_notional: 0,
+        filled_avg_price: None,
     };
     let text = order_json(&order).to_string();
     state.orders.push(order);

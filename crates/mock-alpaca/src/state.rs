@@ -58,6 +58,63 @@ pub struct Order {
     /// When the order was accepted, RFC 3339 UTC.
     pub submitted_at: String,
     pub filled_qty: String,
+    /// Total cost of the fills so far, at `SCALE`.
+    pub filled_notional: i128,
+    /// Weighted average fill price; `None` until the first fill.
+    pub filled_avg_price: Option<String>,
+}
+
+/// One fill, served by the FILL activities route.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct Activity {
+    pub id: String,
+    pub order_id: String,
+    pub symbol: String,
+    pub side: String,
+    pub qty: String,
+    pub price: String,
+    /// When the fill happened, RFC 3339 UTC; strictly increasing across fills.
+    pub transaction_time: String,
+    /// `fill` for a completing fill, `partial_fill` otherwise.
+    pub kind: String,
+}
+
+/// Fixed-point scale for exact money arithmetic: nine decimal places.
+pub const SCALE: i128 = 1_000_000_000;
+
+/// Parse a plain decimal string (optional leading `-`, at most nine decimals)
+/// into an integer at `SCALE`. Anything else is `None`.
+pub fn parse_dec(s: &str) -> Option<i128> {
+    let (neg, rest) = match s.strip_prefix('-') {
+        Some(r) => (true, r),
+        None => (false, s),
+    };
+    let (int, frac) = rest.split_once('.').unwrap_or((rest, ""));
+    let plain = |p: &str| p.bytes().all(|b| b.is_ascii_digit());
+    if int.is_empty() || !plain(int) || !plain(frac) || frac.len() > 9 || int.len() > 20 {
+        return None;
+    }
+    let frac_scaled = format!("{frac:0<9}").parse::<i128>().ok()?;
+    let n = int
+        .parse::<i128>()
+        .ok()?
+        .checked_mul(SCALE)?
+        .checked_add(frac_scaled)?;
+    Some(if neg { -n } else { n })
+}
+
+/// Format an integer at `SCALE` as a decimal string with trailing zeros trimmed.
+pub fn fmt_dec(n: i128) -> String {
+    let sign = if n < 0 { "-" } else { "" };
+    let a = n.unsigned_abs();
+    let scale = SCALE.unsigned_abs();
+    let (int, frac) = (a / scale, a % scale);
+    if frac == 0 {
+        format!("{sign}{int}")
+    } else {
+        let f = format!("{frac:09}");
+        format!("{sign}{int}.{}", f.trim_end_matches('0'))
+    }
 }
 
 /// Mutable state behind the server.
@@ -73,6 +130,10 @@ pub struct State {
     pub bars: Vec<Bar>,
     /// Accepted orders, oldest first.
     pub orders: Vec<Order>,
+    /// Signed position quantity per symbol, at `SCALE`; flat symbols are removed.
+    pub positions: Vec<(String, i128)>,
+    /// Fills in the order they happened.
+    pub activities: Vec<Activity>,
     /// Feeds whose bars are answered 403.
     pub denied_feeds: Vec<String>,
     /// Injected failures: (requests left, status).
