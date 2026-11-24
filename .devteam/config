@@ -4,10 +4,11 @@
 # The one command that says the project works: lint, type check, tests, build.
 # Run by every agent before committing, by the integrator after each merge and
 # at each step, by land.sh after each landing, and by CI. Fast and deterministic.
-# PLACEHOLDER: no code or toolchain exists yet. For now it only verifies README.md
-# exists and that no PDF is tracked (the repo is public). Replace with lint, type
-# check, tests and build once a language is chosen.
-CHECK='test -f README.md && ! git ls-files | grep -qi "\.pdf$"'
+# Always: README.md exists and no PDF is tracked (the repo is public). Once a
+# Cargo.toml exists at the repo root (workspace chain), also: rustfmt, clippy
+# with warnings denied, tests, build (architecture 7.4). The first line puts
+# cargo on PATH for non-interactive shells. No manual swap is needed later.
+CHECK='export PATH="$HOME/.cargo/bin:$PATH"; test -f README.md && ! git ls-files | grep -qi "\.pdf$" && { [ ! -f Cargo.toml ] || { cargo fmt --all --check && cargo clippy --workspace --all-targets --locked -- -D warnings && cargo test --workspace --locked && cargo build --workspace --locked; }; }'
 
 # 1: push integration/<slug> so CI runs on it. 0: stay local.
 CI_PUSH=1

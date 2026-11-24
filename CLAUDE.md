@@ -5,8 +5,8 @@ Keep this file short. It is a map; details live in the files it points to.
 ## Commands
 
 - Check everything: `CHECK` in `.devteam/config` (lint, type check, tests, build). `/devteam:check` runs it.
-- Run the app: none yet (no code). Update when a toolchain is chosen.
-- Run one test: none yet (no tests). Update when a toolchain is chosen.
+- Run the app: `cargo run -p pt-cli -- <args>` (binary `trader`). Needs `~/.cargo/bin` on `PATH`.
+- Run one test: `cargo test -p <crate> --test <name>` for an integration test file, or `cargo test -p <crate> <filter>` for a name filter.
 
 ## Where things are
 
@@ -36,4 +36,9 @@ Keep this file short. It is a map; details live in the files it points to.
 
 ## Conventions
 
-TODO: language version, formatter, naming, error handling, anything a new contributor gets wrong.
+- Rust 2021, toolchain pinned to 1.100.0 in `rust-toolchain.toml`.
+- `cargo fmt` with default settings; `cargo clippy ... -D warnings` must be clean.
+- `unsafe` is forbidden.
+- Money and prices are decimals (`rust_decimal::Decimal`), never floats.
+- One error enum per crate in `error.rs`, built with `thiserror`.
+- CHECK runs the Rust checks automatically once a root `Cargo.toml` exists.

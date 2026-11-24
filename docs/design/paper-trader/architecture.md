@@ -94,7 +94,7 @@ None of these is resolved silently. Each row says which side the design takes an
 
 - Rust 1.100.0, pinned in `rust-toolchain.toml` (`rusqlite` 0.43 needs 1.89 or later). The machine this design was written on has rustup with 1.83.0 installed and `~/.cargo/bin` missing from the non-interactive `PATH`. Both must be fixed before the first chain runs; rustup installs the pinned toolchain on first use if it can reach the network.
 - A C compiler, for the bundled SQLite and for `ring`.
-- `CHECK` in `.devteam/config` is a placeholder today. After the `workspace` chain lands, the integrator replaces it (section 7.4). Until then each step's Proof command is the only gate.
+- `CHECK` in `.devteam/config` runs the Rust checks (section 7.4) as soon as a root `Cargo.toml` exists. Until then it only guards README.md and tracked PDFs, so each step's Proof command is the real gate.
 
 ### 3.5 Must not change
 
@@ -1130,7 +1130,7 @@ Alert codes are strings: `data_not_ready`, `feed_error`, `broker_error`, `order_
 
 ### 7.4 What the integration check must run
 
-After the `workspace` chain lands, the integrator sets `CHECK` to:
+`CHECK` already runs the Rust checks below once a root `Cargo.toml` exists, so no swap is needed when the `workspace` chain lands. The full command is:
 
 ```
 test -f README.md && ! git ls-files | grep -qi "\.pdf$" && cargo fmt --all --check && cargo clippy --workspace --all-targets --locked -- -D warnings && cargo test --workspace --locked && cargo build --workspace --locked

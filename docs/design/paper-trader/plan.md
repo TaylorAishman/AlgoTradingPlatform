@@ -446,7 +446,7 @@ Wave | Chains that can run together
 What the waves mean in practice:
 
 - Wave 1 is one chain and everything waits for it. It is the only chain that touches `Cargo.toml`, `Cargo.lock`, `lib.rs` and `error.rs` files.
-- After the `workspace` chain lands, the integrator replaces the placeholder `CHECK` in `.devteam/config` with the command in architecture 7.4. No chain does this; implementers may not edit `.devteam/`.
+- `CHECK` in `.devteam/config` already runs the architecture 7.4 Rust checks once a root `Cargo.toml` exists, so no swap is needed after the `workspace` chain lands. Implementers may not edit `.devteam/`.
 - The offline research path (import, backtest, cross-check, DSR, PBO) is complete at wave 10 (`cli-validate`). The paper-trading path is complete at wave 13 (`cli-ops`). Wave 14 proves both end to end.
 - No chain waits for an owner step. Keys, stages and approvals are checked by the binary at run time (architecture section 8).
 

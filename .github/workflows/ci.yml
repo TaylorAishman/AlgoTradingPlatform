@@ -16,8 +16,25 @@ jobs:
     steps:
       - uses: actions/checkout@v4
 
-      # TOOLCHAIN SETUP: none yet (repo has no code). Add setup-python/setup-node,
-      # cache and install steps here when a language is chosen.
+      # Rust setup, only once the workspace exists. rustup reads rust-toolchain.toml.
+      - name: Install Rust toolchain
+        if: hashFiles('Cargo.toml') != ''
+        run: |
+          rustup show active-toolchain || rustup toolchain install
+          rustup component add clippy rustfmt
+          cargo --version
+
+      - name: Cache cargo
+        if: hashFiles('Cargo.toml') != ''
+        uses: actions/cache@v4
+        with:
+          path: |
+            ~/.cargo/registry/index
+            ~/.cargo/registry/cache
+            ~/.cargo/git/db
+            target
+          key: cargo-${{ runner.os }}-${{ hashFiles('rust-toolchain.toml', 'Cargo.lock') }}
+          restore-keys: cargo-${{ runner.os }}-
 
       - name: Check
         run: |
@@ -34,7 +51,25 @@ jobs:
         with:
           fetch-depth: 0
 
-      # TOOLCHAIN SETUP: none yet, same as above.
+      # Rust setup, only once the workspace exists. rustup reads rust-toolchain.toml.
+      - name: Install Rust toolchain
+        if: hashFiles('Cargo.toml') != ''
+        run: |
+          rustup show active-toolchain || rustup toolchain install
+          rustup component add clippy rustfmt
+          cargo --version
+
+      - name: Cache cargo
+        if: hashFiles('Cargo.toml') != ''
+        uses: actions/cache@v4
+        with:
+          path: |
+            ~/.cargo/registry/index
+            ~/.cargo/registry/cache
+            ~/.cargo/git/db
+            target
+          key: cargo-${{ runner.os }}-${{ hashFiles('rust-toolchain.toml', 'Cargo.lock') }}
+          restore-keys: cargo-${{ runner.os }}-
 
       - name: Check each step
         env:
