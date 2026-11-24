@@ -2,19 +2,21 @@
 
 use std::fmt;
 use std::sync::Arc;
+use std::time::Duration;
 
 use crate::auth::Credentials;
 use crate::endpoints::Endpoints;
 use crate::error::AlpacaError;
 use crate::limiter::{RateLimiter, Sleeper, SystemClock, ThreadSleeper};
 
+/// Waits before each retry after a 429 reply (R-085).
+const RATE_LIMIT_WAITS_SECS: [u64; 4] = [15, 30, 45, 60];
+
 /// Sends every request with the auth headers, after taking a rate limiter slot.
 pub struct HttpClient {
     endpoints: Endpoints,
     creds: Credentials,
     limiter: RateLimiter,
-    // Used by the retry steps to wait between attempts.
-    #[allow(dead_code)]
     sleeper: Arc<dyn Sleeper>,
     agent: ureq::Agent,
 }
@@ -69,6 +71,20 @@ impl HttpClient {
     }
 
     fn get(&self, url: &str) -> Result<String, AlpacaError> {
+        let mut retries = 0;
+        loop {
+            match self.get_once(url) {
+                Err(AlpacaError::RateLimited) if retries < RATE_LIMIT_WAITS_SECS.len() => {
+                    self.sleeper
+                        .sleep(Duration::from_secs(RATE_LIMIT_WAITS_SECS[retries]));
+                    retries += 1;
+                }
+                other => return other,
+            }
+        }
+    }
+
+    fn get_once(&self, url: &str) -> Result<String, AlpacaError> {
         self.limiter.acquire();
         let mut resp = self
             .agent
