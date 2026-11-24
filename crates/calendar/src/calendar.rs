@@ -53,4 +53,9 @@ impl TradingCalendar {
         }
         &self.sessions[lo..hi]
     }
+
+    /// Calendar days from `date` to the next session after it, or `None` past the end.
+    pub fn calendar_days_to_next(&self, date: NaiveDate) -> Option<i64> {
+        self.next_session(date).map(|n| (n - date).num_days())
+    }
 }
