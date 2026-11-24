@@ -27,7 +27,7 @@ impl From<rusqlite::Error> for StoreError {
 /// A handle on the SQLite store.
 #[derive(Debug)]
 pub struct Store {
-    conn: Connection,
+    pub(crate) conn: Connection,
 }
 
 impl Store {
