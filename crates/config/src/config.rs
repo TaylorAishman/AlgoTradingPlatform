@@ -225,7 +225,40 @@ impl Default for CostCfg {
     }
 }
 
-/// The whole configuration (signoff comes later).
+/// Thresholds for the paper-trading signoff.
+#[derive(Debug, Clone, PartialEq, Eq, Deserialize)]
+#[serde(default, deny_unknown_fields)]
+pub struct SignoffCfg {
+    pub min_sessions: u32,
+    pub min_rebalances: u32,
+    pub min_fills: u32,
+    pub max_replay_mismatches: u32,
+    pub max_reconciliation_breaks: u32,
+    pub max_missed_sessions: u32,
+    pub max_late_rebalances: u32,
+    pub slippage_tolerance_bps: Decimal,
+    pub max_mean_diff_bps: Decimal,
+    pub max_abs_diff_bps: Decimal,
+}
+
+impl Default for SignoffCfg {
+    fn default() -> Self {
+        Self {
+            min_sessions: 63,
+            min_rebalances: 3,
+            min_fills: 30,
+            max_replay_mismatches: 0,
+            max_reconciliation_breaks: 0,
+            max_missed_sessions: 2,
+            max_late_rebalances: 0,
+            slippage_tolerance_bps: Decimal::new(5, 0),
+            max_mean_diff_bps: Decimal::ONE,
+            max_abs_diff_bps: Decimal::new(25, 0),
+        }
+    }
+}
+
+/// The whole configuration.
 #[derive(Debug, Clone, PartialEq, Eq, Deserialize)]
 #[serde(deny_unknown_fields)]
 pub struct Config {
@@ -243,6 +276,8 @@ pub struct Config {
     pub stats: StatsCfg,
     #[serde(default)]
     pub cost: CostCfg,
+    #[serde(default)]
+    pub signoff: SignoffCfg,
     pub universe: Vec<Instrument>,
 }
 
