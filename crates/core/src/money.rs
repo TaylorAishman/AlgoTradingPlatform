@@ -32,3 +32,8 @@ impl Price {
         Money(self.0 * Decimal::from(shares))
     }
 }
+
+/// Round to 6 decimal places, with midpoints rounding away from zero.
+pub fn round6(d: Decimal) -> Decimal {
+    d.round_dp_with_strategy(6, rust_decimal::RoundingStrategy::MidpointAwayFromZero)
+}
