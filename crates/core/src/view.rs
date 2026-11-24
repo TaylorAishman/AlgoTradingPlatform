@@ -20,11 +20,20 @@ pub trait MarketView: HistoryView {
 #[derive(Debug, Clone, Default)]
 pub struct MemoryView {
     adj: BTreeMap<Symbol, BTreeMap<NaiveDate, f64>>,
+    exec: BTreeMap<Symbol, BTreeMap<NaiveDate, Bar>>,
 }
 
 impl MemoryView {
     pub fn new() -> MemoryView {
         MemoryView::default()
+    }
+
+    /// Record an execution bar; a later push for the same symbol and date replaces the earlier one.
+    pub fn push_exec(&mut self, bar: Bar) {
+        self.exec
+            .entry(bar.symbol.clone())
+            .or_default()
+            .insert(bar.date, bar);
     }
 
     /// Record an adjusted close; a later push for the same date replaces the earlier one.
@@ -49,5 +58,29 @@ impl HistoryView for MemoryView {
             .collect();
         out.reverse();
         out
+    }
+}
+
+impl MarketView for MemoryView {
+    fn exec_bar(&self, symbol: &Symbol, date: NaiveDate) -> Option<Bar> {
+        self.exec.get(symbol)?.get(&date).cloned()
+    }
+
+    /// Mean volume of the latest `sessions` bars on or before `asof`.
+    fn adv_shares(&self, symbol: &Symbol, asof: NaiveDate, sessions: usize) -> Option<f64> {
+        if sessions == 0 {
+            return None;
+        }
+        let series = self.exec.get(symbol)?;
+        let vols: Vec<f64> = series
+            .range(..=asof)
+            .rev()
+            .take(sessions)
+            .map(|(_, b)| b.volume as f64)
+            .collect();
+        if vols.len() < sessions {
+            return None;
+        }
+        Some(vols.iter().sum::<f64>() / sessions as f64)
     }
 }
