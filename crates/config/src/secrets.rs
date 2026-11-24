@@ -1,6 +1,9 @@
 //! API key types whose `Debug` and `Display` never print the value.
 
+use std::collections::BTreeMap;
 use std::fmt;
+
+use crate::error::ConfigError;
 
 /// A secret string. Printing it shows `***`; use [`Secret::expose`] to read it.
 #[derive(Clone)]
@@ -34,4 +37,19 @@ impl fmt::Display for Secret {
 pub struct ApiKeys {
     pub key_id: Secret,
     pub secret_key: Secret,
+}
+
+/// Load API keys from an environment map (`APCA_API_KEY_ID`, `APCA_API_SECRET_KEY`).
+///
+/// Both variables must be present and non-empty, otherwise
+/// [`ConfigError::MissingCredentials`] is returned.
+pub fn load_api_keys(env: &BTreeMap<String, String>) -> Result<ApiKeys, ConfigError> {
+    let get = |name: &str| env.get(name).filter(|v| !v.is_empty());
+    match (get("APCA_API_KEY_ID"), get("APCA_API_SECRET_KEY")) {
+        (Some(id), Some(secret)) => Ok(ApiKeys {
+            key_id: Secret::new(id.clone()),
+            secret_key: Secret::new(secret.clone()),
+        }),
+        _ => Err(ConfigError::MissingCredentials),
+    }
 }
