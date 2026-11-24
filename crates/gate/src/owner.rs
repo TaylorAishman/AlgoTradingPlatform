@@ -1,6 +1,6 @@
 //! The owner file: what the owner has approved. A missing file grants nothing.
 
-use std::path::Path;
+use std::path::{Path, PathBuf};
 
 use chrono::NaiveDate;
 use serde::{Deserialize, Serialize};
@@ -83,8 +83,31 @@ fn to_date(value: toml::value::Datetime, key: &str) -> Result<NaiveDate, GateErr
     NaiveDate::from_ymd_opt(i32::from(d.year), u32::from(d.month), u32::from(d.day)).ok_or_else(bad)
 }
 
-/// Load the owner file. A missing file is the default (backtest, nothing granted).
-pub fn load_owner_file(path: &Path, _repo_root: &Path) -> Result<OwnerFile, GateError> {
+/// Canonicalize `path`; if it does not exist, canonicalize its nearest existing
+/// ancestor and re-append the missing tail.
+fn resolve(path: &Path) -> PathBuf {
+    let mut tail = Vec::new();
+    let mut cur = path;
+    loop {
+        if let Ok(base) = cur.canonicalize() {
+            return tail.iter().rev().fold(base, |acc, c| acc.join(c));
+        }
+        match (cur.parent(), cur.file_name()) {
+            (Some(parent), Some(name)) => {
+                tail.push(name.to_owned());
+                cur = parent;
+            }
+            _ => return path.to_path_buf(),
+        }
+    }
+}
+
+/// Load the owner file. A path inside `repo_root` is refused (R-262).
+/// A missing file is the default (backtest, nothing granted).
+pub fn load_owner_file(path: &Path, repo_root: &Path) -> Result<OwnerFile, GateError> {
+    if resolve(path).starts_with(resolve(repo_root)) {
+        return Err(GateError::OwnerFileInRepo);
+    }
     if !path.exists() {
         return Ok(OwnerFile::default());
     }
