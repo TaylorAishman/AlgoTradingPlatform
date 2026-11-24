@@ -2,7 +2,7 @@
 
 use std::str::FromStr;
 
-use chrono::{DateTime, Utc};
+use chrono::{DateTime, SecondsFormat, Utc};
 use rust_decimal::prelude::ToPrimitive;
 use rust_decimal::Decimal;
 
@@ -51,9 +51,48 @@ pub fn order_by_client_id(
     }
 }
 
+/// GET /v2/orders for every status submitted after `after`, oldest first.
+/// Pages of 500 are followed by the last order's `submitted_at`.
+pub fn orders_since(
+    http: &HttpClient,
+    after: DateTime<Utc>,
+) -> Result<Vec<WireOrder>, AlpacaError> {
+    const PAGE: usize = 500;
+    let mut out = Vec::new();
+    let mut cursor = after;
+    loop {
+        let stamp = cursor.to_rfc3339_opts(SecondsFormat::AutoSi, true);
+        let path = format!("/v2/orders?status=all&direction=asc&limit={PAGE}&after={stamp}");
+        let body = http.get_trading(&path)?;
+        let items: Vec<serde_json::Value> =
+            serde_json::from_str(&body).map_err(|e| AlpacaError::Parse(e.to_string()))?;
+        let page = items
+            .iter()
+            .map(parse_order_value)
+            .collect::<Result<Vec<_>, _>>()?;
+        let full = page.len() >= PAGE;
+        if let Some(last) = page.last() {
+            if full && last.submitted_at <= cursor {
+                return Err(AlpacaError::Parse(
+                    "orders paging cursor did not advance".to_string(),
+                ));
+            }
+            cursor = last.submitted_at;
+        }
+        out.extend(page);
+        if !full {
+            return Ok(out);
+        }
+    }
+}
+
 fn parse_order(body: &str) -> Result<WireOrder, AlpacaError> {
     let v: serde_json::Value =
         serde_json::from_str(body).map_err(|e| AlpacaError::Parse(e.to_string()))?;
+    parse_order_value(&v)
+}
+
+fn parse_order_value(v: &serde_json::Value) -> Result<WireOrder, AlpacaError> {
     let text = |k: &str| -> Result<String, AlpacaError> {
         v.get(k)
             .and_then(|x| x.as_str())
