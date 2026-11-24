@@ -182,6 +182,7 @@ How to read the tables:
 | E12 | alpaca-data | Refuse a daily bar that is not at New York midnight | R-091 | sonnet | crates/alpaca/src/data.rs, crates/alpaca/tests/bar_time.rs | cargo test -p pt-alpaca --test bar_time |
 | E13 | alpaca-data | Follow next_page_token to the end | R-090 | sonnet | crates/alpaca/src/data.rs, crates/alpaca/tests/bars_pagination.rs | cargo test -p pt-alpaca --test bars_pagination |
 | E14 | alpaca-data | Report a refused feed as FeedNotPermitted | R-092 | sonnet | crates/alpaca/src/data.rs, crates/alpaca/tests/feed_refusal.rs | cargo test -p pt-alpaca --test feed_refusal |
+| E26 | alpaca-data | Make loopback_client never wait: no rate limit, no real sleep | R-103 | sonnet | crates/alpaca/src/http.rs, crates/alpaca/tests/loopback_no_wait.rs | cargo test -p pt-alpaca --test loopback_no_wait |
 | E15 | alpaca-account | Add account | R-093 | sonnet | crates/alpaca/src/account.rs, crates/alpaca/tests/fixtures/account.json, crates/alpaca/tests/account.rs | cargo test -p pt-alpaca --test account |
 | E16 | alpaca-account | Add positions as signed whole shares | R-094 | sonnet | crates/alpaca/src/account.rs, crates/alpaca/tests/fixtures/positions.json, crates/alpaca/tests/positions.rs | cargo test -p pt-alpaca --test positions |
 | E17 | alpaca-account | Add calendar | R-095 | sonnet | crates/alpaca/src/reference.rs, crates/alpaca/tests/fixtures/calendar.json, crates/alpaca/tests/calendar.rs | cargo test -p pt-alpaca --test calendar |
@@ -204,6 +205,7 @@ How to read the tables:
 | F10 | mock-orders | Add expire and set_order_status | R-115, R-119 | sonnet | crates/mock-alpaca/src/server.rs, crates/mock-alpaca/src/state.rs, crates/mock-alpaca/src/routes.rs, crates/mock-alpaca/tests/order_status.rs | cargo test -p pt-mock-alpaca --test order_status |
 | F11 | mock-orders | Refuse a sell above the long position and a short of a non-shortable asset | R-117 | sonnet | crates/mock-alpaca/src/server.rs, crates/mock-alpaca/src/state.rs, crates/mock-alpaca/src/routes.rs, crates/mock-alpaca/tests/refusals.rs | cargo test -p pt-mock-alpaca --test refusals |
 | F12 | mock-orders | Seed a foreign order and a foreign position | R-118 | sonnet | crates/mock-alpaca/src/server.rs, crates/mock-alpaca/src/state.rs, crates/mock-alpaca/src/routes.rs, crates/mock-alpaca/tests/foreign.rs | cargo test -p pt-mock-alpaca --test foreign |
+| F13 | mock-orders | Serve the FILL activities in pages, with page_size, page_token, after and direction | R-115 | sonnet | crates/mock-alpaca/src/server.rs, crates/mock-alpaca/src/state.rs, crates/mock-alpaca/src/routes.rs, crates/mock-alpaca/tests/fills_paging.rs | cargo test -p pt-mock-alpaca --test fills_paging |
 | D01 | store-codec | Add dec_to_text and text_to_dec | R-053 | sonnet | crates/store/src/codec.rs, crates/store/tests/codec.rs | cargo test -p pt-store --test codec |
 | D02 | store-schema | Add Store::open, open_in_memory, schema_version, execute_raw and the migration runner with the market tables | R-050 | opus | crates/store/src/db.rs, crates/store/migrations/0001_market.sql, crates/store/tests/open.rs | cargo test -p pt-store --test open |
 | D03 | store-schema | Add the trading tables migration | R-050 | opus | crates/store/src/db.rs, crates/store/migrations/0002_trading.sql, crates/store/tests/schema_trading.rs | cargo test -p pt-store --test schema_trading |
@@ -433,8 +435,8 @@ Wave | Chains that can run together
 --- | ---
 1 | workspace (6)
 2 | core-types (6), core-state (2), calendar (4), secrets (4), stats-descriptive (5), stats-normal (2), stats-pbo (6), alpaca-endpoints (4), mock-reference (6), store-codec (1), store-schema (5), gate-owner (4), strategy-vol (3), ops-logging (1), ops-pnl (2), live-lock (1), cli-deploy (1)
-3 | core-view (3), calendar-months (3), config (10), stats-dsr (4), vector (4), alpaca-http (5), mock-orders (6), store-market (5), store-orders (4), store-shadow (1), store-ops (5), gate-authorize (6), gate-status (1), portfolio-orders (6), risk (6), engine-cost (4), live-ids (2)
-4 | config-hash (1), alpaca-data (6), alpaca-account (4), alpaca-orders-read (3), store-ledger (3), strategy-risk (4), strategy-tsmom (6), portfolio-weights (5), engine-sim (5), data-view (3), data-import (3), ops-alerts (4)
+3 | core-view (3), calendar-months (3), config (10), stats-dsr (4), vector (4), alpaca-http (5), mock-orders (7), store-market (5), store-orders (4), store-shadow (1), store-ops (5), gate-authorize (6), gate-status (1), portfolio-orders (6), risk (6), engine-cost (4), live-ids (2)
+4 | config-hash (1), alpaca-data (7), alpaca-account (4), alpaca-orders-read (3), store-ledger (3), strategy-risk (4), strategy-tsmom (6), portfolio-weights (5), engine-sim (5), data-view (3), data-import (3), ops-alerts (4)
 5 | alpaca-write (3), store-append-only (1), strategy-benchmark (1), engine-decide (6), engine-sim-guards (4), data-quality (2), data-reference (2), data-doctor (2), ops-report (6), live-context (2), shadow-slippage (2), cli-base (6)
 6 | engine-backtest (4), data-ingest (6), data-universe (2), live-submit (5), live-reconcile (5), live-snapshots (3), shadow-daily (3), shadow-replay (3), cli-import (2)
 7 | validate-backtest (5), live-settle (4), live-rebalance (4), shadow-fidelity (3), cli-data (3)
@@ -446,7 +448,7 @@ Wave | Chains that can run together
 13 | cli-ops (4)
 14 | cli-e2e (2)
 
-87 chains, 318 steps. Widest wave: 17 chains. Longest chain: 10 steps.
+87 chains, 320 steps. Widest wave: 17 chains. Longest chain: 10 steps.
 
 What the waves mean in practice:
 
@@ -477,12 +479,12 @@ One line per chain: what to look for when reviewing it.
 - `vector`: This crate must share no accounting code with the engine. Read it against architecture 5.10.5 only.
 - `alpaca-endpoints`: There must be no way to obtain an `Endpoints` value for any non-loopback host other than the two constants.
 - `alpaca-http`: Check that waits go through `Sleeper` (no real sleeping) and that no 4xx other than 429 is retried.
-- `alpaca-data`: Check that bars are asked of the market data base URL and never the trading one (E25, E10), the query against architecture 5.9, and that each price reaches `Decimal` through its shortest round-trip text, inside `data.rs` (see Replans).
+- `alpaca-data`: Check that bars are asked of the market data base URL and never the trading one (E25, E10), the query against architecture 5.9, and that each price reaches `Decimal` through its shortest round-trip text, inside `data.rs` (see Replans). E26 is not about bars: it makes the test client match architecture 5.5, so check that nothing built by `loopback_client` can sleep or be rate limited.
 - `alpaca-account`: Numeric fields arrive as strings; check none is parsed through a float.
 - `alpaca-orders-read`: Check paging: fills page by the last activity id, orders by `after`.
 - `alpaca-write`: This is the only code that POSTs an order. Check the permit is consumed and compared before any request is made, that the POST and DELETE helpers in `http.rs` are `pub(crate)`, and that an order is sent again only after a 429 and never after a 5xx (see Replans).
 - `mock-reference`: The mock is the fixture for every broker test: check its JSON shapes against architecture 5.9, strings for trading numbers, numbers for bar prices.
-- `mock-orders`: Check that a scripted fill moves order state, position, cash and the activity list together.
+- `mock-orders`: Check that a scripted fill moves order state, position, cash and the activity list together, that every order carries `submitted_at` and every fill `transaction_time`, and that both lists end for a client that asks again after a full page: orders by `after`, fills by `page_token` set to the last id (F13, see Replans).
 - `store-codec`: Text in, text out: no float may appear between a `Decimal` and the column.
 - `store-schema`: Read the three SQL files against the table list in architecture 5.4: keys, TEXT for money, foreign keys.
 - `store-market`: The as-of read is what makes decision replay possible: check it returns the latest version at or before the instant, per date.
@@ -696,3 +698,95 @@ Other chains:
 Architecture 5.5 names no request method on `HttpClient`, as the `alpaca-data` replan noted. Its next revision should add `pub(crate) fn post_trading` and `pub(crate) fn delete_trading` with the signatures above, and the retry table.
 
 Sizes, from a scratch build of all three steps on top of E20, E25 and the `gate-authorize` chain, with `cargo fmt` and `clippy -D warnings` clean: E22 about 200 changed lines (about 115 of them test), E23 about 150 (about 135 test), E24 about 120 (about 90 test). E22 is over the 150-line aim and cannot be cut: the POST helper may not land without `submit_order`, and `submit_order` without it could only fail. The three steps write the same two source files and build on one another, so none can move to a chain of its own.
+
+### mock-orders, replan 1: the review fix was too big
+
+The review read F07 to F12 against architecture 5.9 and against the client that will read the mock (`orders_read.rs` and `activities.rs` on `chain/paper-trader/alpaca-orders-read`). It found three gaps:
+
+- Orders were served without `submitted_at`. The `pt-alpaca` order parser requires it. The `alpaca-write` replan above noted the same thing.
+- Fills were served without `transaction_time`. `parse_fill` requires it.
+- Neither list was paged. `orders_since` and `fill_activities` ask again while a page is full. Against a list that ignores the cursor, a full page comes back full every time.
+
+The fix goes into F07 to F12 as they are rebuilt. Their rows do not change. They now also carry: `submitted_at` on every order (F07), `after`, `direction` and `limit` on the order list (F08), `transaction_time` on every fill (F09), checks on scripted and posted input, and a timestamp on the seeded foreign order (F12).
+
+Paging of the FILL activities did not fit. With it F09 came to 433 changed lines, over the 400 the run allows one step. It is one new last step, F13. Requirements and architecture are unchanged.
+
+F13, the route:
+
+- The change is in `routes.rs`. `state.rs` and `server.rs` are in Files as for every step of this chain; the trial build did not touch them.
+- Order: oldest first, which is the order `fill` created them in. `direction=desc` reverses it. A request with no `direction` stays oldest first, because R-115 and `tests/fills.rs` read a bare GET that way.
+- `page_token` is the `id` of a fill. Serve only the fills behind it, in the order asked for. Read it with the `query_param` helper already in `routes.rs`, which undoes percent-encoding: the client encodes the token.
+- A `page_token` that names no fill is answered 422. An empty list would hide a client bug, and the first page again would make the client loop for ever.
+- `after`: keep the fills whose `transaction_time` is strictly later. One that is not an RFC 3339 timestamp is ignored, as the order list of F08 does.
+- `page_size`: 100 when absent or not a number, and held between 1 and 100.
+- Apply them in that order: direction, `page_token`, `after`, `page_size`.
+- The body stays a bare JSON array of the same nine keys as in F09. There is no next-page field. The client learns that there is more only from a full page.
+- A `page_token` that names the newest fill gives `[]` with status 200. That reply is what ends the client's loop when the last page is exactly full.
+
+Tests for F13 (`fills_paging.rs`):
+
+- `pt-mock-alpaca` cannot call `pt-alpaca`: its dev-dependencies are `serde_json` and `ureq`, and this chain may not edit a manifest. The test replays the loop of `fill_activities` by hand with `ureq`: GET `/v2/account/activities/FILL?direction=asc&page_size=N&after=T`, then the same query with `&page_token=<id of the last item>` for as long as the page has N items.
+- Give that loop a limit, for example 50 pages, and fail when it is reached. Before F13 the mock ignores `page_token`, so an unlimited loop hangs instead of failing. Checked: written this way, every case below fails in under a second against the F12 code.
+- Make n fills with one order of n shares and n calls of `fill(id, 1, "100")`, after `seed_account` with enough cash. 150 fills take a few milliseconds.
+- The client's case (R-099): 150 fills read with N = 100 come back as pages of 100 and 50 in two requests, 150 distinct ids, each fill once.
+- A last page that is exactly full: 4 fills read with N = 2 come back as pages of 2, 2 and 0.
+- Size: with 101 fills, a bare GET returns 100, and so does `page_size=500`.
+- `after`: with 5 fills and `after` set to the `transaction_time` of the second, the loop returns the ids of the last three, in order.
+- Direction: with 3 fills, `direction=desc` is the reverse of `direction=asc`, and `direction=desc` with `page_token` set to the middle id returns only the oldest fill.
+- `page_token=nope` is answered 422.
+- A bare GET now returns at most 100 fills. No test of F07 to F12 scripts that many; the whole crate's tests pass with the trial change.
+
+Size, from a trial build on top of the rebuilt F12, with `cargo fmt` and `clippy -D warnings` clean: about 210 changed lines. `routes.rs` gains 48 and moves 21, and the test file is 143. That is twice the first estimate and over the 150-line aim. It is one step all the same: about 80 of the test lines are the helpers that make fills and replay the client's loop, and a second step for `after` and `direction` would need them again in a test file of its own, giving about 180 and 105 lines.
+
+Other chains:
+
+- `mock-orders` is seven steps and stays in wave 3. No After changes. Every step writes the same three source files, so none can move to a chain of its own.
+- The first steps that read these lists through the real client are in `pt-live`: O06 (`live-submit`) for orders and O12 (`live-settle`) for fills. Nothing before them can show a mismatch between the mock and `pt-alpaca`, because the mock's own tests cannot call the client.
+- Not changed here: no requirement row asks for any of this. R-114 does not mention `submitted_at` or the order-list query, and R-115 does not mention `transaction_time` or paging. The tests are written from this section. The next revision of the requirements should add them to those two rows.
+- Not changed here either: Alpaca's own default for `direction` is newest first (its API reference for this endpoint, read 2026-11-24, which also gives 100 as the default and the maximum `page_size` and describes `page_token` as the id of the last activity of the previous page). The mock's bare GET is oldest first because R-115 reads it that way. `fill_activities` always sends `direction=asc`, so the client cannot tell the difference. If R-115 is revised to send `direction=asc`, the mock's default can follow Alpaca.
+
+### alpaca-data: E26 added by the mock-orders replan
+
+This is the last "Not changed here" item of the `alpaca-write` replan above. It is a deviation in a chain that is already reviewed, and it is confirmed: `loopback_client` (E06, `crates/alpaca/src/http.rs`) is built with `ThreadSleeper` and `RateLimiter::new(200, ..)` on `SystemClock`. Architecture 5.5 describes it as "no rate limit, a sleeper that returns at once", and architecture 7.3 forbids tests that sleep.
+
+Measured against the code as it is on `chain/paper-trader/alpaca-data`:
+
+- A GET answered 429 then 200 takes 15 s.
+- A GET answered 500 five times takes 15 s.
+- The 201st GET within a minute is held for the rest of the minute.
+
+R-316 runs the live fixture with `fail_next(100, 500)` and R-394 runs it with every request failing. Each failing call would wait those 15 s for real.
+
+Why it slipped: R-103 is the only requirement on `loopback_client`, and it checks the loopback rule only. The requirements are left as they are. Their next revision should add the no-wait check to R-103.
+
+Where the step goes:
+
+- `alpaca-http` is reviewed and takes no more steps.
+- `http.rs` belongs to `alpaca-http`, then `alpaca-data` (E25), then `alpaca-write` (E22 to E24), and `alpaca-write` already lists `alpaca-data` under After. E26 is appended to `alpaca-data`, after E14. The order of the chains that write `http.rs` does not change, and neither does any After or any wave.
+- `alpaca-account` and `alpaca-orders-read` run beside `alpaca-data`. They do not list `http.rs` or the new test file.
+- E26 changes `loopback_client`, one new private type and one import line. E22 to E24 change the request methods. They do not meet.
+- The step is not part of that chain's story, which is bars. It is there because `alpaca-data` is the only chain not yet reviewed that may write `http.rs` before `alpaca-write` does. The Story in the Chains table is left as it is.
+- The chains that need it, `live-cycle-failures` (R-316) and `cli-live` (R-394), wait for `alpaca-data` through `live-context`.
+
+E26:
+
+- Add a private sleeper to `http.rs` whose `sleep` returns at once. `limiter.rs` belongs to `alpaca-endpoints` and is not in Files.
+- `loopback_client` gives that sleeper to both the `RateLimiter` and the `HttpClient`, and builds the limiter with `u32::MAX` requests per minute on `SystemClock`.
+- Do not keep the limit of 200. With a sleeper that returns at once, a full window makes `acquire` spin on the real clock until the minute has passed.
+- Do not use a clock that stands still. The limiter drops a recorded call only when the clock has moved 60 s past it, so its list would grow with every request.
+- Remove `ThreadSleeper` from the imports of `http.rs`; an unused import fails clippy. The type stays in `limiter.rs` for the real client.
+- The signature, the dummy credentials and the loopback check do not change. `tests/loopback_client.rs` (R-103) must pass untouched.
+
+Tests for E26 (`loopback_no_wait.rs`):
+
+- The sleeper and the limiter are private to the client, so the only thing a test can observe is elapsed time. Take `std::time::Instant::now()` before the call and assert that less than 5 s have passed after it. That reads the clock and waits for nothing, which is what architecture 7.3 is about. After E26 the three cases together run in about 0.1 s; before it the shortest takes 15 s. The bound leaves a wide margin on both sides.
+- Use `common::Listener` and `http.get_trading("/v2/clock")` with `{}` as the 200 body. Nothing needs parsing.
+- 429 then 200: `Ok`, two requests seen, under 5 s.
+- Five 500 replies: `Server { status: 500 }`, five requests seen, under 5 s.
+- 201 replies of 200 and 201 GETs through one client: all `Ok`, under 5 s.
+- Assert the returned value and the elapsed time before `Listener::finish`.
+- Before E26 the three cases fail after 15, 15 and 60 s. The red run takes a minute. That is the defect, not a hang. Checked.
+
+Size, from a trial build on `chain/paper-trader/alpaca-data` with `cargo fmt` and `clippy -D warnings` clean: about 75 changed lines, 16 of them in `http.rs`.
+
+One note on the `alpaca-write` section above: its tests still build the client with `HttpClient::new` and `common::Fake`, not with `loopback_client`. Once E26 has landed the reason is no longer that `loopback_client` sleeps. It is that those tests assert the recorded sleeps, and only a `Fake` records them.
