@@ -119,3 +119,41 @@ pub fn vector_equity(inp: &VectorInputs) -> Result<Vec<Decimal>, VectorError> {
     }
     Ok(out)
 }
+
+/// The outcome of comparing two equity series.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct CrossCheck {
+    /// True when no date differs by more than the tolerance.
+    pub equal: bool,
+    pub max_abs_diff: Decimal,
+    /// The earliest date whose absolute difference exceeds the tolerance.
+    pub first_diff_date: Option<NaiveDate>,
+}
+
+/// Compares two equity series date by date against an absolute tolerance.
+pub fn compare(
+    dates: &[NaiveDate],
+    a: &[Decimal],
+    b: &[Decimal],
+    tolerance: Decimal,
+) -> Result<CrossCheck, VectorError> {
+    if a.len() != b.len() || a.len() != dates.len() {
+        return Err(VectorError::LengthMismatch);
+    }
+    let mut max_abs_diff = Decimal::ZERO;
+    let mut first_diff_date = None;
+    for ((date, x), y) in dates.iter().zip(a).zip(b) {
+        let diff = (x - y).abs();
+        if diff > max_abs_diff {
+            max_abs_diff = diff;
+        }
+        if diff > tolerance && first_diff_date.is_none() {
+            first_diff_date = Some(*date);
+        }
+    }
+    Ok(CrossCheck {
+        equal: first_diff_date.is_none(),
+        max_abs_diff,
+        first_diff_date,
+    })
+}
