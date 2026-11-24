@@ -1,0 +1,32 @@
+[package]
+name = "pt-live"
+description = "Order identifiers and state mapping, idempotent submission, settlement, reconciliation, equity snapshots, rebalance decisions, the run cycle, the first-order flow and the kill switch"
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+publish.workspace = true
+
+[lints]
+workspace = true
+
+[dependencies]
+chrono.workspace = true
+pt-alpaca.workspace = true
+pt-calendar.workspace = true
+pt-config.workspace = true
+pt-core.workspace = true
+pt-data.workspace = true
+pt-engine.workspace = true
+pt-gate.workspace = true
+pt-ops.workspace = true
+pt-risk.workspace = true
+pt-store.workspace = true
+pt-strategy.workspace = true
+rust_decimal.workspace = true
+serde_json.workspace = true
+thiserror.workspace = true
+
+[dev-dependencies]
+pt-mock-alpaca.workspace = true
+tempfile.workspace = true

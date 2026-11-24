@@ -1,0 +1,25 @@
+[package]
+name = "pt-ops"
+description = "Alerts to log, database and webhook, structured logging, and the status and P&L report"
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+publish.workspace = true
+
+[lints]
+workspace = true
+
+[dependencies]
+chrono.workspace = true
+pt-config.workspace = true
+pt-core.workspace = true
+pt-store.workspace = true
+rust_decimal.workspace = true
+serde_json.workspace = true
+thiserror.workspace = true
+ureq.workspace = true
+
+[dev-dependencies]
+tempfile.workspace = true
+tiny_http.workspace = true

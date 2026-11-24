@@ -1,0 +1,50 @@
+[workspace]
+members = ["crates/*"]
+resolver = "2"
+
+[workspace.package]
+version = "0.1.0"
+edition = "2021"
+rust-version = "1.100.0"
+license = "MIT OR Apache-2.0"
+publish = false
+
+[workspace.lints.rust]
+unsafe_code = "forbid"
+
+[workspace.dependencies]
+# Workspace crates.
+pt-core = { path = "crates/core" }
+pt-calendar = { path = "crates/calendar" }
+pt-config = { path = "crates/config" }
+pt-store = { path = "crates/store" }
+pt-alpaca = { path = "crates/alpaca" }
+pt-mock-alpaca = { path = "crates/mock-alpaca" }
+pt-data = { path = "crates/data" }
+pt-strategy = { path = "crates/strategy" }
+pt-portfolio = { path = "crates/portfolio" }
+pt-risk = { path = "crates/risk" }
+pt-engine = { path = "crates/engine" }
+pt-vector = { path = "crates/vector" }
+pt-stats = { path = "crates/stats" }
+pt-gate = { path = "crates/gate" }
+pt-live = { path = "crates/live" }
+pt-shadow = { path = "crates/shadow" }
+pt-ops = { path = "crates/ops" }
+pt-validate = { path = "crates/validate" }
+
+# External crates (architecture section 4).
+rust_decimal = "1"
+chrono = "0.4"
+serde = { version = "1", features = ["derive"] }
+serde_json = "1"
+toml = "1"
+thiserror = "2"
+anyhow = "1"
+rusqlite = { version = "0.43", features = ["bundled"] }
+ureq = "3"
+tiny_http = "0.12"
+clap = { version = "4", features = ["derive"] }
+sha2 = "0.11"
+csv = "1"
+tempfile = "3"

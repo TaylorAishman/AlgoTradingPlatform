@@ -1,0 +1,26 @@
+[package]
+name = "pt-validate"
+description = "Backtest runner with trial registration, engine-versus-vector cross-check, DSR and PBO over the registry and benchmark comparison"
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+publish.workspace = true
+
+[lints]
+workspace = true
+
+[dependencies]
+chrono.workspace = true
+pt-calendar.workspace = true
+pt-config.workspace = true
+pt-core.workspace = true
+pt-data.workspace = true
+pt-engine.workspace = true
+pt-stats.workspace = true
+pt-store.workspace = true
+pt-strategy.workspace = true
+pt-vector.workspace = true
+rust_decimal.workspace = true
+sha2.workspace = true
+thiserror.workspace = true
