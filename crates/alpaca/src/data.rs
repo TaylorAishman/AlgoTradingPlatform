@@ -38,13 +38,43 @@ pub fn daily_bars(
         adjustment,
         feed,
     );
-    let body = http.get_data(&query)?;
-    parse_page(&body)
+    let mut out = Vec::new();
+    let mut token: Option<String> = None;
+    loop {
+        let url = match &token {
+            Some(t) => format!("{query}&page_token={}", percent_encode(t)),
+            None => query.clone(),
+        };
+        let body = http.get_data(&url)?;
+        let (bars, next) = parse_page(&body)?;
+        out.extend(bars);
+        match next {
+            None => return Ok(out),
+            Some(n) if token.as_deref() == Some(n.as_str()) => {
+                return Err(AlpacaError::Parse(format!("next_page_token repeated: {n}")));
+            }
+            Some(n) => token = Some(n),
+        }
+    }
+}
+
+/// Percent-encode every byte outside the RFC 3986 unreserved set.
+fn percent_encode(s: &str) -> String {
+    let mut out = String::new();
+    for b in s.bytes() {
+        if b.is_ascii_alphanumeric() || matches!(b, b'-' | b'.' | b'_' | b'~') {
+            out.push(b as char);
+        } else {
+            out.push_str(&format!("%{b:02X}"));
+        }
+    }
+    out
 }
 
 #[derive(Deserialize)]
 struct Page {
     bars: Option<BTreeMap<String, Vec<RawBar>>>,
+    next_page_token: Option<String>,
 }
 
 /// Prices are `Decimal` fields of a derived `Deserialize`, which reads a JSON number
@@ -60,7 +90,7 @@ struct RawBar {
     v: u64,
 }
 
-fn parse_page(body: &str) -> Result<Vec<WireBar>, AlpacaError> {
+fn parse_page(body: &str) -> Result<(Vec<WireBar>, Option<String>), AlpacaError> {
     let page: Page = serde_json::from_str(body).map_err(|e| AlpacaError::Parse(e.to_string()))?;
     let mut out = Vec::new();
     for (symbol, bars) in page.bars.unwrap_or_default() {
@@ -90,5 +120,5 @@ fn parse_page(body: &str) -> Result<Vec<WireBar>, AlpacaError> {
             });
         }
     }
-    Ok(out)
+    Ok((out, page.next_page_token.filter(|t| !t.is_empty())))
 }
