@@ -71,4 +71,17 @@ impl TradingCalendar {
             })
             .collect()
     }
+
+    /// The last month-end session of the calendar month `months` months before the month of
+    /// `date`, or `None` when the calendar holds no such session.
+    pub fn month_end_back(&self, date: NaiveDate, months: u32) -> Option<NaiveDate> {
+        let index = i64::from(date.year()) * 12 + i64::from(date.month0()) - i64::from(months);
+        let year = i32::try_from(index.div_euclid(12)).ok()?;
+        let month = u32::try_from(index.rem_euclid(12)).ok()? + 1;
+        let first = NaiveDate::from_ymd_opt(year, month, 1)?;
+        let last = first
+            .checked_add_months(chrono::Months::new(1))?
+            .pred_opt()?;
+        self.month_end_sessions(first, last).last().copied()
+    }
 }
