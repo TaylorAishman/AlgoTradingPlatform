@@ -34,7 +34,7 @@ How to read the tables:
 | alpaca-data | Daily bars are fetched, paged and parsed into exact decimals. | alpaca-http |
 | alpaca-account | Account, positions, calendar and asset status are read from the trading API. | alpaca-http |
 | alpaca-orders-read | Orders and fill activities can be read back, to the last page. | alpaca-http |
-| alpaca-write | An order can be sent only by spending a permit issued for exactly that order. | alpaca-orders-read, gate-authorize |
+| alpaca-write | An order can be sent only by spending a permit issued for exactly that order. | alpaca-orders-read, alpaca-data, gate-authorize |
 | mock-reference | Tests can start a loopback Alpaca double that serves account, clock, calendar, asset and bar data and injects failures. | workspace |
 | mock-orders | The double accepts orders and lets a test script fills, expiries, odd statuses and foreign activity. | mock-reference |
 | store-codec | Decimals survive the database unchanged. | workspace |
@@ -189,9 +189,9 @@ How to read the tables:
 | E19 | alpaca-orders-read | Add order_by_client_id | R-097 | sonnet | crates/alpaca/src/orders_read.rs, crates/alpaca/tests/fixtures/order.json, crates/alpaca/tests/order_lookup.rs | cargo test -p pt-alpaca --test order_lookup |
 | E20 | alpaca-orders-read | Add orders_since | R-098 | sonnet | crates/alpaca/src/orders_read.rs, crates/alpaca/tests/fixtures/orders.json, crates/alpaca/tests/orders_since.rs | cargo test -p pt-alpaca --test orders_since |
 | E21 | alpaca-orders-read | Add fill_activities with paging | R-099 | sonnet | crates/alpaca/src/activities.rs, crates/alpaca/tests/fixtures/activities.json, crates/alpaca/tests/fill_activities.rs | cargo test -p pt-alpaca --test fill_activities |
-| E22 | alpaca-write | Add submit_order, which consumes a matching OrderPermit | R-100 | opus | crates/alpaca/src/orders_write.rs, crates/alpaca/tests/submit_order.rs | cargo test -p pt-alpaca --test submit_order |
-| E23 | alpaca-write | Report a rejected order without retrying | R-101 | sonnet | crates/alpaca/src/orders_write.rs, crates/alpaca/tests/submit_rejected.rs | cargo test -p pt-alpaca --test submit_rejected |
-| E24 | alpaca-write | Add cancel_order | R-102 | sonnet | crates/alpaca/src/orders_write.rs, crates/alpaca/tests/cancel_order.rs | cargo test -p pt-alpaca --test cancel_order |
+| E22 | alpaca-write | Add submit_order, which consumes a matching OrderPermit | R-100, R-082 | opus | crates/alpaca/src/orders_write.rs, crates/alpaca/src/http.rs, crates/alpaca/src/orders_read.rs, crates/alpaca/tests/submit_order.rs | cargo test -p pt-alpaca --test submit_order |
+| E23 | alpaca-write | Send an order again only after a 429 | R-101, R-085 | opus | crates/alpaca/src/http.rs, crates/alpaca/src/orders_write.rs, crates/alpaca/tests/submit_rejected.rs | cargo test -p pt-alpaca --test submit_rejected |
+| E24 | alpaca-write | Add cancel_order | R-102, R-082, R-086 | sonnet | crates/alpaca/src/orders_write.rs, crates/alpaca/src/http.rs, crates/alpaca/tests/cancel_order.rs | cargo test -p pt-alpaca --test cancel_order |
 | F01 | mock-reference | Start a loopback server on a free port and record every request | R-110 | sonnet | crates/mock-alpaca/src/server.rs, crates/mock-alpaca/src/state.rs, crates/mock-alpaca/src/routes.rs, crates/mock-alpaca/tests/listen.rs | cargo test -p pt-mock-alpaca --test listen |
 | F02 | mock-reference | Answer 401 without the auth headers | R-111 | sonnet | crates/mock-alpaca/src/server.rs, crates/mock-alpaca/src/state.rs, crates/mock-alpaca/src/routes.rs, crates/mock-alpaca/tests/auth.rs | cargo test -p pt-mock-alpaca --test auth |
 | F03 | mock-reference | Serve the seeded account and clock | R-112 | sonnet | crates/mock-alpaca/src/server.rs, crates/mock-alpaca/src/state.rs, crates/mock-alpaca/src/routes.rs, crates/mock-alpaca/tests/account_clock.rs | cargo test -p pt-mock-alpaca --test account_clock |
@@ -480,7 +480,7 @@ One line per chain: what to look for when reviewing it.
 - `alpaca-data`: Check that bars are asked of the market data base URL and never the trading one (E25, E10), the query against architecture 5.9, and that each price reaches `Decimal` through its shortest round-trip text, inside `data.rs` (see Replans).
 - `alpaca-account`: Numeric fields arrive as strings; check none is parsed through a float.
 - `alpaca-orders-read`: Check paging: fills page by the last activity id, orders by `after`.
-- `alpaca-write`: This is the only code that POSTs an order. Check the permit is consumed and compared before any request is made.
+- `alpaca-write`: This is the only code that POSTs an order. Check the permit is consumed and compared before any request is made, that the POST and DELETE helpers in `http.rs` are `pub(crate)`, and that an order is sent again only after a 429 and never after a 5xx (see Replans).
 - `mock-reference`: The mock is the fixture for every broker test: check its JSON shapes against architecture 5.9, strings for trading numbers, numbers for bar prices.
 - `mock-orders`: Check that a scripted fill moves order state, position, cash and the activity list together.
 - `store-codec`: Text in, text out: no float may appear between a `Decimal` and the column.
@@ -615,3 +615,84 @@ Other chains:
 Architecture 5.5 shows `HttpClient` with `new` only and names no request method. That is not the cause of this replan and is left as it is: the request methods are called only by `pt-alpaca`'s own modules, and 5.9 already says which host each endpoint is on. It did leave them without a home, since a step builds only the section 5 signatures its text names. The next revision of the architecture should add to 5.5: `pub fn get_trading(&self, path_and_query: &str) -> Result<String, AlpacaError>` and `pub fn get_data(&self, path_and_query: &str) -> Result<String, AlpacaError>`, with the note that write verbs stay `pub(crate)`.
 
 The chain is six steps long. E25 is the only step that touches `http.rs`; E10 to E14 all write `data.rs` and build on one another, so none can move to a chain of its own.
+
+### alpaca-write, replan 1: E22 and E24 were stuck
+
+Found before the chain started, by the `alpaca-data` replan above. Three things were wrong:
+
+- E22 needs a POST and E24 a DELETE on the trading host. `HttpClient` has `get_trading` and `get_data` and nothing else, and the limiter, auth and retry code behind them is private to `crates/alpaca/src/http.rs`. Neither step listed that file.
+- E22 returns a `WireOrder`. The only code that reads one from JSON is `parse_order` in `crates/alpaca/src/orders_read.rs`, and it is private. E22 did not list that file either.
+- E23 ("Report a rejected order without retrying") had nothing to build. R-101 holds as soon as a POST exists that is sent once, so its tests would pass before the step began. The run treats a step whose tests do not fail first as stuck.
+
+The chain keeps three steps and the IDs E22 to E24. Requirements and architecture are unchanged.
+
+What changed in the tables:
+
+- Chains: `alpaca-write` gains `alpaca-data` under After. That chain wrote `http.rs` last (E25). The wave is still 5.
+- E22: Files gain `http.rs` and `orders_read.rs`. Reqs gain R-082.
+- E23: the step is now "Send an order again only after a 429". Files gain `http.rs`, Reqs gain R-085, and the tier is `opus` because the step decides when an order may be sent twice.
+- E24: Files gain `http.rs`. Reqs gain R-082 and R-086.
+
+The retry rule, by verb. R-085 and R-086 are written for every call and R-101 takes the 5xx retry away from the order POST. No document states the rule per verb, so it is stated here:
+
+| Reply | GET | POST | DELETE |
+| --- | --- | --- | --- |
+| 429 | wait 15, 30, 45, 60 s (R-085) | the same, from E23 on | the same |
+| 5xx | wait 1, 2, 4, 8 s (R-086) | never retried (R-101) | the same as GET |
+| other 4xx | never retried (R-087) | never retried (R-101) | never retried |
+| transport error | never retried | never retried | never retried |
+
+- A 429 is the rate limiter refusing the request, so no order was taken. The POST sent again has the same body and the same `client_order_id`.
+- After a 5xx the broker may already hold the order. Nothing in `pt-alpaca` sends it again. The next run looks the order up by its client order id and adopts it (architecture D-20, R-284).
+- Cancelling twice cannot create anything, so a DELETE follows the general rule.
+
+E22:
+
+- `http.rs` gains `pub(crate) fn post_trading(&self, path: &str, json: &str) -> Result<String, AlpacaError>`. It prefixes `endpoints.trading()`, takes a limiter slot, sends both auth headers and `Content-Type: application/json`, and maps the status as a GET does: 2xx is `Ok(body)`, 429 is `RateLimited`, 5xx is `Server`, anything else is `Rejected` with the raw body as `message`.
+- In E22 it sends once and retries nothing. That is the safe side of every row in the table, and it leaves E23 something to build.
+- It is `pub(crate)`, never `pub`. A public POST would let any crate send an order without a permit (architecture D-17). A `pub(crate)` method that nothing calls fails the dead-code lint ("method is never used" under `-D warnings`), which is why it lands in the step that adds `submit_order`.
+- Because it is `pub(crate)`, no test file can call it. Everything about the POST is proven through `submit_order`.
+- ureq is 3.5.2 as locked. A POST is `agent.post(url).header(..).send(json)` with the body as a `&str`. ureq adds no JSON content type for a `&str`, so the header is set by hand. No `json` feature and no `Cargo.toml` edit is needed. A GET ends in `.call()` and its builder is a different type, so the two requests cannot be built by one expression. Share what follows the send: keep one copy of the status mapping.
+- `orders_read.rs`: the one change allowed is `fn parse_order(body: &str) -> Result<WireOrder, AlpacaError>` becoming `pub(crate)`. Its behaviour does not change. It needs `id`, `client_order_id`, `symbol`, `side`, `qty`, `filled_qty`, `status` and `submitted_at`, all as JSON strings. Do not write a second order parser.
+- `submit_order` builds a `pt_gate::gate::OrderSummary` from the four fields of the `NewOrder` and calls `permit.matches`. On `false` it returns `PermitMismatch` before it touches `http`, so no limiter slot is taken either. The permit is taken by value and is spent either way.
+- The body is the six keys of R-100: `qty` as a string, `type` always `market`, `time_in_force` always `day`. Build it with `serde_json`. The path is `/v2/orders`.
+- `pt-gate`, `chrono` and `serde_json` are already dependencies of `pt-alpaca`, so the test file can use all three with no manifest change.
+
+Tests for E22:
+
+- A permit has no public constructor (R-265). The only way to get one is `Gate::authorize`: build the gate from `OwnerFile { stage: Stage::Paper, strategy_allowlist: vec![id], account_flat_confirmed_on: Some(day), ..OwnerFile::default() }` and pass an `AuthContext` with the same strategy id and every flag `false`.
+- Build the client with `HttpClient::new` and `common::Fake`, as `http_data_host.rs` does. The trading override is a `common::Listener`; the data override is a loopback URL where nothing listens (`http://127.0.0.1:1`). That proves the trading host.
+- Do not use `loopback_client`. Its sleeper really sleeps.
+- The success reply must carry all eight fields the parser needs, for example `{"id":"b7","client_order_id":"pt-a-1","symbol":"SPY","side":"buy","qty":"10","filled_qty":"0","status":"accepted","submitted_at":"2026-12-01T13:00:00Z"}`. Assert the parsed values.
+- The listener saw one request: method `POST`, `Seen.url` equal to `/v2/orders`, both auth headers with the values given to `Credentials::new` (R-082), and `Content-Type: application/json`. Compare `Seen.body` with the object of R-100 as `serde_json::Value`, because the key order is free.
+- "The listener saw no request" (qty 11): a `Listener` with a queued reply never finishes if nothing arrives. Queue one reply, assert `Err(PermitMismatch)`, then send one `http.get_trading("/v2/clock")` through the same client and call `finish`. The only request seen must be that GET.
+- Assert nothing about a 429, 5xx or 4xx reply to the POST here. Those belong to E23, and a test that pinned "a 429 is reported after one request" would fail when E23 lands.
+
+E23:
+
+- After E22 a 429 to the POST comes back as `RateLimited` after one request. E23 sends the POST through the retry loop that GETs use, with the 5xx arm off for it. Pass that as a parameter. Do not write a second loop.
+- The change is in `http.rs`. `orders_write.rs` is in Files but should need no edit.
+- Tests go through `submit_order`, with the permit and client built as in E22.
+- R-085, failing before E23: replies 429, 429, 200 give `Ok`, recorded sleeps of 15 s then 30 s, and three POSTs with identical bodies. Five 429 replies give `RateLimited`, sleeps of 15, 30, 45 and 60 s, and five requests.
+- R-101, passing before E23 and still passing after it: a 403 with `{"message":"insufficient buying power"}` gives `Rejected { status: 403, .. }` whose message contains that text, one request, no sleep. A 500 gives `Server { status: 500 }`, one request, no sleep. These two are the guard on E23's change.
+- Assert the returned value and `fake.sleeps()` before calling `Listener::finish`. `finish` waits until every queued reply has been served, so a test that calls it first hangs when a retry is missing instead of failing. Checked: written this way, the two R-085 tests fail at once against E22's code.
+- For the 500, queue a second reply (a 200 order) behind it. With one reply queued, a POST that is wrongly sent again gets no answer and the test hangs; checked. With two, the wrong code gets the 200 and the test fails at once. After the asserts, take the unspent reply with one `http.get_trading("/v2/clock")` as in E22, then `finish`: the listener saw one POST and that GET.
+
+E24:
+
+- `http.rs` gains `pub(crate) fn delete_trading(&self, path: &str) -> Result<String, AlpacaError>`, on the same loop as a GET with both retries on. It lands here, with `cancel_order` as its caller, for the same lint reason as E22.
+- `cancel_order` sends DELETE `/v2/orders/{broker_order_id}` and turns any 2xx into `Ok(())`. The body is ignored. A 204 has none, and ureq returns an empty string for it.
+- `cancel_order` takes no permit (architecture 5.5). The stage check is the caller's: `Gate::allows(Capability::CancelOrder)`, proven by R-321.
+- Tests: a reply of `(204, String::new())` from `common::Listener` gives `Ok(())`, with method `DELETE`, `Seen.url` equal to `/v2/orders/b1` and both auth headers (R-082). A 422 gives `Rejected { status: 422, .. }` after one request and no sleep. For R-086: 503 then 204 gives `Ok(())` after one sleep of 1 s; five 500 replies give `Server { status: 500 }` after five requests and sleeps of 1, 2, 4 and 8 s. The client is built as in E22, and the value and the sleeps are asserted before `finish` as in E23.
+
+Other chains:
+
+- `crates/alpaca/src/http.rs` now belongs to `alpaca-http`, then `alpaca-data`, then `alpaca-write`. `alpaca-account` and `alpaca-orders-read` read through `get_trading` only and list neither `http.rs` nor `orders_write.rs`, so they do not conflict with this chain. `orders_read.rs` belongs to `alpaca-orders-read` and then to E22, and `alpaca-write` already waits for that chain.
+- Other crates write orders only through `submit_order` and `cancel_order`, which are public (`live-submit` and `live-killswitch` are the first callers). No step outside this chain needs the two helpers or `http.rs`.
+- What a caller of `submit_order` can rely on: `PermitMismatch` means nothing was sent; `Rejected` means the broker refused the order; `Server` or `Transport` means the broker may or may not hold it.
+- Not changed here, because it is another chain: `MockAlpaca` serves orders without `submitted_at` (`order_json` in `crates/mock-alpaca/src/routes.rs`, as of F11), and the `pt-alpaca` order parser requires that field. Against the mock, `submit_order`, `order_by_client_id` and `orders_since` would each return `AlpacaError::Parse`. This chain's tests use `common::Listener` and are not affected. `live-submit` (O06) is the first step that would be. The mock has to serve the field; R-114 does not ask for it.
+- Not changed here either: `loopback_client` was built with the real `ThreadSleeper` and a 200 per minute limiter on the system clock. Architecture 5.5 describes it as "no rate limit, a sleeper that returns at once". A test in another crate that uses it with `fail_next(n, 500)` (R-316, R-394) will really wait 1, 2, 4 and 8 s on each failing GET or DELETE, against the rule of architecture 7.3.
+
+Architecture 5.5 names no request method on `HttpClient`, as the `alpaca-data` replan noted. Its next revision should add `pub(crate) fn post_trading` and `pub(crate) fn delete_trading` with the signatures above, and the retry table.
+
+Sizes, from a scratch build of all three steps on top of E20, E25 and the `gate-authorize` chain, with `cargo fmt` and `clippy -D warnings` clean: E22 about 200 changed lines (about 115 of them test), E23 about 150 (about 135 test), E24 about 120 (about 90 test). E22 is over the 150-line aim and cannot be cut: the POST helper may not land without `submit_order`, and `submit_order` without it could only fail. The three steps write the same two source files and build on one another, so none can move to a chain of its own.
