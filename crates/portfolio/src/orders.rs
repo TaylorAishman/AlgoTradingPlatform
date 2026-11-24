@@ -39,15 +39,19 @@ pub fn target_shares(
 
 /// Orders that trade the difference between current and target shares.
 ///
-/// One leg-1 order per target symbol whose share count changes, sorted by symbol.
+/// One leg-1 order per symbol whose share count changes, sorted by symbol. A held symbol
+/// absent from `target` is closed to zero.
 /// The side follows the sign of `target - current`; the reference price comes from `prices`.
 pub fn plan_orders(
     current: &Positions,
     target: &Positions,
     prices: &BTreeMap<Symbol, Price>,
 ) -> Result<Vec<OrderIntent>, PortfolioError> {
+    let mut symbols: std::collections::BTreeSet<&Symbol> = target.keys().collect();
+    symbols.extend(current.keys());
     let mut out = Vec::new();
-    for (symbol, want) in target {
+    for symbol in symbols {
+        let want = target.get(symbol).copied().unwrap_or(0);
         let have = current.get(symbol).copied().unwrap_or(0);
         let diff = want.checked_sub(have).ok_or_else(|| {
             PortfolioError::Invalid(format!("share difference overflow for {symbol}"))
