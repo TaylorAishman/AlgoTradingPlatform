@@ -39,11 +39,12 @@ How to read the tables:
 | mock-orders | The double accepts orders and lets a test script fills, expiries, odd statuses and foreign activity. | mock-reference |
 | store-codec | Decimals survive the database unchanged. | workspace |
 | store-schema | Opening the database creates the whole schema, versions it and refuses a newer one. | workspace |
-| store-market | Bars are stored as versions readable as of any instant, next to the calendar and asset snapshots. | store-schema, store-codec, core-types, calendar |
-| store-orders | Decisions, orders, their state history and fills are recorded once each. | store-schema, store-codec, core-types, core-state |
+| store-conn | The repository modules of pt-store can use the connection that Store opens. | store-schema |
+| store-market | Bars are stored as versions readable as of any instant, next to the calendar and asset snapshots. | store-schema, store-conn, store-codec, core-types, calendar |
+| store-orders | Decisions, orders, their state history and fills are recorded once each. | store-schema, store-conn, store-codec, core-types, core-state |
 | store-ledger | Positions, cash and equity snapshots come from an append-only ledger. | store-orders |
-| store-shadow | Shadow comparison rows and per-order slippage are stored. | store-schema, store-codec |
-| store-ops | Runs, halts, alerts, trials and backtest results are recorded. | store-schema, store-codec |
+| store-shadow | Shadow comparison rows and per-order slippage are stored. | store-schema, store-conn, store-codec |
+| store-ops | Runs, halts, alerts, trials and backtest results are recorded. | store-schema, store-conn, store-codec |
 | store-append-only | The database itself refuses to change or delete bars, fills and ledger entries. | store-market, store-ledger |
 | gate-owner | The operating stage comes from an owner file outside the repository that the binary only reads. | workspace |
 | gate-authorize | Every order needs a permit that only the gate can issue, under the rules of the current stage. | gate-owner |
@@ -212,6 +213,7 @@ How to read the tables:
 | D04 | store-schema | Add the shadow and operations tables migration | R-050 | opus | crates/store/src/db.rs, crates/store/migrations/0003_ops.sql, crates/store/tests/schema_ops.rs | cargo test -p pt-store --test schema_ops |
 | D05 | store-schema | Refuse a database whose version is newer than the binary | R-051 | sonnet | crates/store/src/db.rs, crates/store/tests/schema_too_new.rs | cargo test -p pt-store --test schema_too_new |
 | D06 | store-schema | Turn on write-ahead logging and foreign keys at open | R-052 | sonnet | crates/store/src/db.rs, crates/store/tests/pragmas.rs | cargo test -p pt-store --test pragmas |
+| D26 | store-conn | Make the connection that Store holds visible to the other modules of pt-store | R-054, R-060, R-067, R-068 | sonnet | crates/store/src/db.rs | cargo test -p pt-store && cargo test -p pt-archtest |
 | D07 | store-market | Add upsert_bars: insert, leave unchanged, or add a restated version | R-054 | opus | crates/store/src/market.rs, crates/store/tests/bars_versions.rs | cargo test -p pt-store --test bars_versions |
 | D08 | store-market | Add bars_asof | R-055 | sonnet | crates/store/src/market.rs, crates/store/tests/bars_asof.rs | cargo test -p pt-store --test bars_asof |
 | D09 | store-market | Prove raw, adjusted and per-feed series stay separate | R-056 | sonnet | crates/store/src/market.rs, crates/store/tests/bars_keys.rs | cargo test -p pt-store --test bars_keys |
@@ -435,26 +437,27 @@ Wave | Chains that can run together
 --- | ---
 1 | workspace (6)
 2 | core-types (6), core-state (2), calendar (4), secrets (4), stats-descriptive (5), stats-normal (2), stats-pbo (6), alpaca-endpoints (4), mock-reference (6), store-codec (1), store-schema (5), gate-owner (4), strategy-vol (3), ops-logging (1), ops-pnl (2), live-lock (1), cli-deploy (1)
-3 | core-view (3), calendar-months (3), config (10), stats-dsr (4), vector (4), alpaca-http (5), mock-orders (7), store-market (5), store-orders (4), store-shadow (1), store-ops (5), gate-authorize (6), gate-status (1), portfolio-orders (6), risk (6), engine-cost (4), live-ids (2)
-4 | config-hash (1), alpaca-data (7), alpaca-account (4), alpaca-orders-read (3), store-ledger (3), strategy-risk (4), strategy-tsmom (6), portfolio-weights (5), engine-sim (5), data-view (3), data-import (3), ops-alerts (4)
-5 | alpaca-write (3), store-append-only (1), strategy-benchmark (1), engine-decide (6), engine-sim-guards (4), data-quality (2), data-reference (2), data-doctor (2), ops-report (6), live-context (2), shadow-slippage (2), cli-base (6)
-6 | engine-backtest (4), data-ingest (6), data-universe (2), live-submit (5), live-reconcile (5), live-snapshots (3), shadow-daily (3), shadow-replay (3), cli-import (2)
-7 | validate-backtest (5), live-settle (4), live-rebalance (4), shadow-fidelity (3), cli-data (3)
-8 | validate-crosscheck (3), validate-overfit (3), live-legs (3), live-rebalance-timing (4), live-killswitch (2), shadow-signoff (3)
-9 | live-cycle (5), cli-backtest (3)
-10 | live-cycle-failures (3), cli-validate (3)
-11 | live-first-order (3)
-12 | cli-live (3)
-13 | cli-ops (4)
-14 | cli-e2e (2)
+3 | core-view (3), calendar-months (3), config (10), stats-dsr (4), vector (4), alpaca-http (5), mock-orders (7), store-conn (1), gate-authorize (6), gate-status (1), portfolio-orders (6), risk (6), engine-cost (4), live-ids (2)
+4 | config-hash (1), alpaca-data (7), alpaca-account (4), alpaca-orders-read (3), store-market (5), store-orders (4), store-shadow (1), store-ops (5), strategy-risk (4), strategy-tsmom (6), portfolio-weights (5), engine-sim (5)
+5 | alpaca-write (3), store-ledger (3), strategy-benchmark (1), engine-decide (6), engine-sim-guards (4), data-view (3), data-import (3), data-quality (2), data-reference (2), data-doctor (2), ops-alerts (4), cli-base (6)
+6 | store-append-only (1), engine-backtest (4), data-ingest (6), data-universe (2), ops-report (6), live-context (2), shadow-slippage (2), shadow-replay (3), cli-import (2)
+7 | validate-backtest (5), live-submit (5), live-reconcile (5), live-snapshots (3), shadow-daily (3), cli-data (3)
+8 | validate-crosscheck (3), validate-overfit (3), live-settle (4), live-rebalance (4), shadow-fidelity (3)
+9 | live-legs (3), live-rebalance-timing (4), live-killswitch (2), shadow-signoff (3), cli-backtest (3)
+10 | live-cycle (5), cli-validate (3)
+11 | live-cycle-failures (3)
+12 | live-first-order (3)
+13 | cli-live (3)
+14 | cli-ops (4)
+15 | cli-e2e (2)
 
-87 chains, 320 steps. Widest wave: 17 chains. Longest chain: 10 steps.
+88 chains, 321 steps. Widest wave: 17 chains. Longest chain: 10 steps.
 
 What the waves mean in practice:
 
 - Wave 1 is one chain and everything waits for it. It is the only chain that touches `Cargo.toml`, `Cargo.lock`, `lib.rs` and `error.rs` files.
 - `CHECK` in `.devteam/config` already runs the architecture 7.4 Rust checks once a root `Cargo.toml` exists, so no swap is needed after the `workspace` chain lands. Implementers may not edit `.devteam/`.
-- The offline research path (import, backtest, cross-check, DSR, PBO) is complete at wave 10 (`cli-validate`). The paper-trading path is complete at wave 13 (`cli-ops`). Wave 14 proves both end to end.
+- The offline research path (import, backtest, cross-check, DSR, PBO) is complete at wave 10 (`cli-validate`). The paper-trading path is complete at wave 14 (`cli-ops`). Wave 15 proves both end to end.
 - No chain waits for an owner step. Keys, stages and approvals are checked by the binary at run time (architecture section 8).
 
 Before the first chain: the build machine needs `~/.cargo/bin` on the non-interactive `PATH` and network access so rustup can install the pinned toolchain (architecture 3.4).
@@ -487,6 +490,7 @@ One line per chain: what to look for when reviewing it.
 - `mock-orders`: Check that a scripted fill moves order state, position, cash and the activity list together, that every order carries `submitted_at` and every fill `transaction_time`, and that both lists end for a client that asks again after a full page: orders by `after`, fills by `page_token` set to the last id (F13, see Replans).
 - `store-codec`: Text in, text out: no float may appear between a `Decimal` and the column.
 - `store-schema`: Read the three SQL files against the table list in architecture 5.4: keys, TEXT for money, foreign keys.
+- `store-conn`: One line in `db.rs` and no test: check the field is `pub(crate)`, not `pub`, and that nothing else changed.
 - `store-market`: The as-of read is what makes decision replay possible: check it returns the latest version at or before the instant, per date.
 - `store-orders`: Uniqueness is the idempotency mechanism: check each duplicate is reported as `Duplicate`, not as a generic SQL error.
 - `store-ledger`: Positions and cash must be sums over ledger rows, never stored totals.
@@ -790,3 +794,74 @@ Tests for E26 (`loopback_no_wait.rs`):
 Size, from a trial build on `chain/paper-trader/alpaca-data` with `cargo fmt` and `clippy -D warnings` clean: about 75 changed lines, 16 of them in `http.rs`.
 
 One note on the `alpaca-write` section above: its tests still build the client with `HttpClient::new` and `common::Fake`, not with `loopback_client`. Once E26 has landed the reason is no longer that `loopback_client` sleeps. It is that those tests assert the recorded sleeps, and only a `Fake` records them.
+
+### store-ops, replan 1: D20 was stuck
+
+D20 ("Add start_run, finish_run and runs") could not be built inside its Files. `Store` (D02, `crates/store/src/db.rs`, landed with `store-schema`) keeps its `rusqlite::Connection` in a private field. `market.rs`, `trading.rs`, `shadow.rs` and `ops.rs` are siblings of `db`, not children of it, so an `impl Store` block in any of them cannot read that field. The only public way to run SQL is `execute_raw`, which binds no parameters and returns no rows. Every repository step lists its own module and its own test file and nothing else.
+
+The same gap stops four chains at their first step, so this replan covers all four:
+
+- `store-market`: D07 to D11.
+- `store-orders`: D12 to D15, and `store-ledger` (D16 to D18) behind it.
+- `store-shadow`: D19.
+- `store-ops`: D20 to D24.
+
+What changed:
+
+- One new chain, `store-conn`, with one step, D26. It lists `store-schema` under After.
+- `store-market`, `store-orders`, `store-shadow` and `store-ops` list `store-conn` under After.
+- No existing step row changed. Requirements and architecture are unchanged.
+
+D26:
+
+- In `crates/store/src/db.rs`, change the field `conn: Connection` of `Store` to `pub(crate) conn: Connection`. That is the whole step: one line.
+- Not `pub`. Architecture 5.4 shows `Store` with private contents, and other crates must reach the database through the repository methods only. `pub(crate)` keeps the field out of the public API.
+- Not an accessor. A `pub(crate) fn conn(&self) -> &Connection` that nothing calls yet fails the dead-code lint under `clippy -D warnings`, and the repository modules that would call it belong to other chains. A field that `db.rs` already reads is not dead code.
+- Do not change `execute_raw`, `open`, `init` or `migrate`.
+
+Why D26 has no test, and what its Proof is:
+
+- The step has no observable behaviour. No public signature changes and no SQL changes.
+- A test file under `crates/store/tests/` is a separate crate, and so is a doctest. Neither can see a `pub(crate)` item, before or after the step.
+- A unit test inside `db.rs` is a child of `db` and can read the private field already. It passes before the step, so it proves nothing. A test that could fail first would have to live in a sibling module, and those files belong to the four chains (`lib.rs` belongs to `workspace`).
+- So the tester writes nothing for D26, and the step's Files is `db.rs` alone.
+- The Proof is that nothing broke: `cargo test -p pt-store && cargo test -p pt-archtest`. It passes before the step as well. `CHECK`, run at the step commit, adds `cargo fmt --check` and `clippy -D warnings`.
+- The failing-then-passing evidence comes one wave later. The tests of D07, D12, D19 and D20 are already written and locked in their worktrees (`bars_versions.rs`, `decisions.rs`, `shadow_rows.rs`, `runs.rs`). None can pass without D26. They stay exactly as they are.
+- Reqs names R-054, R-060, R-067 and R-068, the requirements of those four steps. D26 enables them and proves none of them.
+- The reviewer checks that the diff is that one line.
+
+What the repository steps can reach after D26, for D07 to D24:
+
+- Each module adds `use crate::db::Store;` and its own `impl Store` block. Inside it, `self.conn.execute(sql, params![..])`, `self.conn.prepare(..)` with `query_map`, and `self.conn.last_insert_rowid()` all work.
+- Every repository method in architecture 5.4 takes `&self`. `Connection::transaction` needs `&mut self`, so a write that must be all or nothing uses `self.conn.unchecked_transaction()`, which takes `&self`. Do not change a signature to `&mut self`.
+- `impl From<rusqlite::Error> for StoreError` is in `db.rs` and applies to the whole crate, so `?` works in every module. It maps every error to `StoreError::Sql`. A step that owes `Duplicate`, `NotFound` or `IllegalTransition` decides that in its own module, before the `?`.
+- `rusqlite` is declared with the `bundled` feature only, so `DateTime`, `NaiveDate` and `Decimal` are not SQL types. Each module writes them as the TEXT forms of architecture 5.4 (RFC 3339 UTC, `YYYY-MM-DD`, `dec_to_text`) and parses them on the way out. No step edits `Cargo.toml`.
+
+Checked with a trial build of the tree as it is on the default branch (rusqlite 0.43.0, as locked):
+
+- With the one-line change alone, `cargo fmt --check`, `clippy -D warnings`, `cargo test -p pt-store` and `cargo test -p pt-archtest` pass.
+- With the field left private and an unused `pub(crate) fn conn` added instead, clippy stops with "method `conn` is never used".
+- With a throwaway `ops.rs` written on top of it (the three methods of D20, one of them inside `unchecked_transaction`), the locked `runs.rs` passes with `clippy -D warnings` clean. `ops.rs` and `runs.rs` were the only other files touched.
+
+Who writes `db.rs`, in order:
+
+- `store-schema` (D02 to D06, landed), then `store-conn` (D26), then `store-append-only` (D25).
+- `store-append-only` lists `store-market` and `store-ledger` under After. Both now wait for `store-conn`, so D25 always starts from a `db.rs` that has D26. Its After is unchanged.
+- D26 changes the field line. D25 adds one entry to `MIGRATIONS`. They do not meet.
+- The four repository chains still do not list `db.rs`. They run side by side as before, and none shares a file with `store-conn`.
+
+Waves:
+
+- On paper `store-conn` is in wave 3. The four repository chains move from wave 3 to wave 4, `store-ledger` to wave 5 and `store-append-only` to wave 6. The table is one wave longer: `cli-ops` is wave 14 and `cli-e2e` wave 15. The offline research path still ends at wave 10.
+- In practice `store-schema` has landed, so `store-conn` can start at once, and it is one line.
+- The branches of the four repository chains have no commits yet, so there is nothing to rebase. They move to a base that has D26, with their locked test files left in place.
+
+Rejected:
+
+- Adding `db.rs` to the Files of D07, D12, D19 and D20. Four chains of one wave would then share a file, and four existing rows would change.
+- Appending the step to `store-schema`. That chain has landed and takes no more steps.
+- A public `conn()` or a public parameterised `execute`. Either hands every crate raw SQL with bound parameters, past the repositories.
+
+Architecture 5.4 shows `pub struct Store { /* private */ }` and puts `impl Store` blocks in four other modules. It does not say how those modules reach the connection. That is not the cause of this replan: `pub(crate)` satisfies both statements, and the gap was in the Files of the plan. The next revision of the architecture should add one line to 5.4: the connection is `pub(crate)`, and the repository modules use it directly.
+
+The chain is one step long.
