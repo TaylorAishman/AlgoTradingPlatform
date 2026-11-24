@@ -6,7 +6,7 @@ use std::sync::Arc;
 use crate::auth::Credentials;
 use crate::endpoints::Endpoints;
 use crate::error::AlpacaError;
-use crate::limiter::{RateLimiter, Sleeper};
+use crate::limiter::{RateLimiter, Sleeper, SystemClock, ThreadSleeper};
 
 /// Sends every request with the auth headers, after taking a rate limiter slot.
 pub struct HttpClient {
@@ -25,6 +25,16 @@ impl fmt::Debug for HttpClient {
             .field("endpoints", &self.endpoints)
             .finish_non_exhaustive()
     }
+}
+
+/// A client for tests: both base URLs point at `url`, which must be a loopback
+/// host. Any other host is refused with `EndpointNotAllowed`.
+pub fn loopback_client(url: &str) -> Result<HttpClient, AlpacaError> {
+    let endpoints = Endpoints::with_overrides(Some(url), Some(url))?;
+    let sleeper: Arc<dyn Sleeper> = Arc::new(ThreadSleeper);
+    let limiter = RateLimiter::new(200, Arc::new(SystemClock::new()), sleeper.clone());
+    let creds = Credentials::new("loopback-key".to_string(), "loopback-secret".to_string());
+    Ok(HttpClient::new(endpoints, creds, limiter, sleeper))
 }
 
 impl HttpClient {
