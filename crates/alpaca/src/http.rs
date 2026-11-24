@@ -111,26 +111,51 @@ impl HttpClient {
 
     fn get_once(&self, url: &str) -> Result<String, AlpacaError> {
         self.limiter.acquire();
-        let mut resp = self
+        let resp = self
             .agent
             .get(url)
             .header("APCA-API-KEY-ID", self.creds.key_id())
             .header("APCA-API-SECRET-KEY", self.creds.secret_key())
-            .call()
-            .map_err(|e| AlpacaError::Transport(e.to_string()))?;
-        let status = resp.status().as_u16();
-        let body = resp
-            .body_mut()
-            .read_to_string()
-            .map_err(|e| AlpacaError::Transport(e.to_string()))?;
-        match status {
-            200..=299 => Ok(body),
-            429 => Err(AlpacaError::RateLimited),
-            500..=599 => Err(AlpacaError::Server { status }),
-            _ => Err(AlpacaError::Rejected {
-                status,
-                message: body,
-            }),
-        }
+            .call();
+        read_reply(resp)
+    }
+
+    /// POST `json` to `path` on the trading base URL and return the body of a
+    /// 2xx reply. Sent once: nothing is retried (R-101).
+    ///
+    /// `pub(crate)` on purpose: only `submit_order`, which holds a permit, may
+    /// send a POST (architecture D-17).
+    pub(crate) fn post_trading(&self, path: &str, json: &str) -> Result<String, AlpacaError> {
+        let url = format!("{}{}", self.endpoints.trading(), path);
+        self.limiter.acquire();
+        let resp = self
+            .agent
+            .post(&url)
+            .header("APCA-API-KEY-ID", self.creds.key_id())
+            .header("APCA-API-SECRET-KEY", self.creds.secret_key())
+            .header("Content-Type", "application/json")
+            .send(json);
+        read_reply(resp)
+    }
+}
+
+/// Maps a reply to the body of a 2xx, or to the error for its status.
+fn read_reply(
+    resp: Result<ureq::http::Response<ureq::Body>, ureq::Error>,
+) -> Result<String, AlpacaError> {
+    let mut resp = resp.map_err(|e| AlpacaError::Transport(e.to_string()))?;
+    let status = resp.status().as_u16();
+    let body = resp
+        .body_mut()
+        .read_to_string()
+        .map_err(|e| AlpacaError::Transport(e.to_string()))?;
+    match status {
+        200..=299 => Ok(body),
+        429 => Err(AlpacaError::RateLimited),
+        500..=599 => Err(AlpacaError::Server { status }),
+        _ => Err(AlpacaError::Rejected {
+            status,
+            message: body,
+        }),
     }
 }
