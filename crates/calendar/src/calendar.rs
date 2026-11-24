@@ -1,6 +1,6 @@
 //! The trading calendar: an ordered list of session dates.
 
-use chrono::NaiveDate;
+use chrono::{Datelike, NaiveDate};
 
 use crate::error::CalendarError;
 
@@ -57,5 +57,31 @@ impl TradingCalendar {
     /// Calendar days from `date` to the next session after it, or `None` past the end.
     pub fn calendar_days_to_next(&self, date: NaiveDate) -> Option<i64> {
         self.next_session(date).map(|n| (n - date).num_days())
+    }
+
+    /// Sessions in `start..=end` whose next session falls in a different month.
+    /// The last session of the calendar is never one, since its successor is unknown.
+    pub fn month_end_sessions(&self, start: NaiveDate, end: NaiveDate) -> Vec<NaiveDate> {
+        self.sessions_between(start, end)
+            .iter()
+            .copied()
+            .filter(|&s| {
+                self.next_session(s)
+                    .is_some_and(|n| (n.year(), n.month()) != (s.year(), s.month()))
+            })
+            .collect()
+    }
+
+    /// The last month-end session of the calendar month `months` months before the month of
+    /// `date`, or `None` when the calendar holds no such session.
+    pub fn month_end_back(&self, date: NaiveDate, months: u32) -> Option<NaiveDate> {
+        let index = i64::from(date.year()) * 12 + i64::from(date.month0()) - i64::from(months);
+        let year = i32::try_from(index.div_euclid(12)).ok()?;
+        let month = u32::try_from(index.rem_euclid(12)).ok()? + 1;
+        let first = NaiveDate::from_ymd_opt(year, month, 1)?;
+        let last = first
+            .checked_add_months(chrono::Months::new(1))?
+            .pred_opt()?;
+        self.month_end_sessions(first, last).last().copied()
     }
 }
