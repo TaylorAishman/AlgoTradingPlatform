@@ -5,7 +5,7 @@ use std::thread::JoinHandle;
 
 use crate::routes;
 pub use crate::state::Recorded;
-use crate::state::{Clock, State};
+use crate::state::{Asset, Clock, State};
 
 /// A mock Alpaca server bound to 127.0.0.1 on a free port.
 pub struct MockAlpaca {
@@ -97,6 +97,26 @@ impl MockAlpaca {
             is_open,
             next_open: next_open.to_string(),
             next_close: next_close.to_string(),
+        });
+    }
+
+    /// Seed the session dates (YYYY-MM-DD) served at `/v2/calendar`.
+    pub fn seed_sessions(&self, dates: &[&str]) {
+        self.state
+            .lock()
+            .unwrap_or_else(|e| e.into_inner())
+            .sessions = dates.iter().map(|d| d.to_string()).collect();
+    }
+
+    /// Seed an asset served at `/v2/assets/<symbol>`; `easy_to_borrow` picks the borrow status.
+    pub fn seed_asset(&self, symbol: &str, tradable: bool, shortable: bool, easy_to_borrow: bool) {
+        let mut st = self.state.lock().unwrap_or_else(|e| e.into_inner());
+        st.assets.retain(|a| a.symbol != symbol);
+        st.assets.push(Asset {
+            symbol: symbol.to_string(),
+            tradable,
+            shortable,
+            easy_to_borrow,
         });
     }
 

@@ -57,7 +57,43 @@ pub fn respond(req: &Recorded, state: &State) -> (u16, String) {
                     return (200, body.to_string());
                 }
             }
-            _ => {}
+            "/v2/calendar" => {
+                let param = |k: &str| {
+                    req.query
+                        .split('&')
+                        .filter_map(|kv| kv.split_once('='))
+                        .find(|(name, _)| *name == k)
+                        .map(|(_, v)| v.to_string())
+                };
+                let start = param("start");
+                let end = param("end");
+                let entries: Vec<_> = state
+                    .sessions
+                    .iter()
+                    .filter(|d| start.as_ref().is_none_or(|s| d.as_str() >= s.as_str()))
+                    .filter(|d| end.as_ref().is_none_or(|e| d.as_str() <= e.as_str()))
+                    .map(|d| json!({"date": d, "open": "09:30", "close": "16:00"}))
+                    .collect();
+                return (200, serde_json::Value::Array(entries).to_string());
+            }
+            path => {
+                if let Some(sym) = path.strip_prefix("/v2/assets/") {
+                    if let Some(a) = state.assets.iter().find(|a| a.symbol == sym) {
+                        let borrow = if a.easy_to_borrow {
+                            "easy_to_borrow"
+                        } else {
+                            "hard_to_borrow"
+                        };
+                        let body = json!({
+                            "symbol": a.symbol,
+                            "tradable": a.tradable,
+                            "shortable": a.shortable,
+                            "borrow_status": borrow,
+                        });
+                        return (200, body.to_string());
+                    }
+                }
+            }
         }
     }
     (404, r#"{"message":"not found"}"#.to_string())
