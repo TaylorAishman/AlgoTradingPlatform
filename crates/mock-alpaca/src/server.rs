@@ -5,7 +5,7 @@ use std::thread::JoinHandle;
 
 use crate::routes;
 pub use crate::state::Recorded;
-use crate::state::State;
+use crate::state::{Clock, State};
 
 /// A mock Alpaca server bound to 127.0.0.1 on a free port.
 pub struct MockAlpaca {
@@ -51,16 +51,14 @@ impl MockAlpaca {
                         query,
                         body,
                     };
+                    let mut st = state.lock().unwrap_or_else(|e| e.into_inner());
                     let (status, text) = if authed {
-                        routes::respond(&rec)
+                        routes::respond(&rec, &st)
                     } else {
                         routes::unauthorized()
                     };
-                    state
-                        .lock()
-                        .unwrap_or_else(|e| e.into_inner())
-                        .requests
-                        .push(rec);
+                    st.requests.push(rec);
+                    drop(st);
                     let mut response =
                         tiny_http::Response::from_string(text).with_status_code(status);
                     if let Ok(h) = tiny_http::Header::from_bytes("Content-Type", "application/json")
@@ -82,6 +80,24 @@ impl MockAlpaca {
     /// Base URL serving trading and data routes.
     pub fn url(&self) -> String {
         format!("http://127.0.0.1:{}", self.port)
+    }
+
+    /// Seed the account served at `/v2/account`; `cash` is also the equity.
+    pub fn seed_account(&self, cash: &str) {
+        self.state
+            .lock()
+            .unwrap_or_else(|e| e.into_inner())
+            .account_cash = Some(cash.to_string());
+    }
+
+    /// Set the clock served at `/v2/clock`.
+    pub fn set_clock(&self, timestamp: &str, is_open: bool, next_open: &str, next_close: &str) {
+        self.state.lock().unwrap_or_else(|e| e.into_inner()).clock = Some(Clock {
+            timestamp: timestamp.to_string(),
+            is_open,
+            next_open: next_open.to_string(),
+            next_close: next_close.to_string(),
+        });
     }
 
     /// Every request received so far, oldest first.
