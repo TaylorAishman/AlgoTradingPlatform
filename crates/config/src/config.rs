@@ -5,6 +5,7 @@ use rust_decimal::Decimal;
 use serde::{Deserialize, Deserializer};
 
 use pt_core::cost::CostSpec;
+use pt_core::types::Symbol;
 
 use crate::error::ConfigError;
 
@@ -297,6 +298,81 @@ fn validate(cfg: &Config) -> Result<(), ConfigError> {
             "sizing.max_gross must be in (0, 1], got {max_gross}"
         )));
     }
+    let lookbacks = &cfg.strategy.lookback_months;
+    if lookbacks.is_empty() || lookbacks.contains(&0) {
+        return Err(ConfigError::Invalid(
+            "strategy.lookback_months must be non-empty with every entry at least 1".into(),
+        ));
+    }
+    let mut distinct = std::collections::HashSet::new();
+    if !lookbacks.iter().all(|m| distinct.insert(*m)) {
+        return Err(ConfigError::Invalid(
+            "strategy.lookback_months must not contain duplicates".into(),
+        ));
+    }
+    if cfg.strategy.vol_min_obs > cfg.strategy.vol_max_obs {
+        return Err(ConfigError::Invalid(format!(
+            "strategy.vol_min_obs ({}) must not exceed strategy.vol_max_obs ({})",
+            cfg.strategy.vol_min_obs, cfg.strategy.vol_max_obs
+        )));
+    }
+    if cfg.stats.pbo_partitions < 2 || !cfg.stats.pbo_partitions.is_multiple_of(2) {
+        return Err(ConfigError::Invalid(format!(
+            "stats.pbo_partitions must be an even number of at least 2, got {}",
+            cfg.stats.pbo_partitions
+        )));
+    }
+    if cfg.sizing.target_vol <= Decimal::ZERO {
+        return Err(ConfigError::Invalid(format!(
+            "sizing.target_vol must be positive, got {}",
+            cfg.sizing.target_vol
+        )));
+    }
+    if cfg.risk.max_order_notional <= Decimal::ZERO {
+        return Err(ConfigError::Invalid(format!(
+            "risk.max_order_notional must be positive, got {}",
+            cfg.risk.max_order_notional
+        )));
+    }
+    let fractions = [
+        ("sizing.max_weight", cfg.sizing.max_weight),
+        ("risk.daily_loss_limit", cfg.risk.daily_loss_limit),
+        ("risk.max_drawdown", cfg.risk.max_drawdown),
+    ];
+    for (key, v) in fractions {
+        if v <= Decimal::ZERO || v > Decimal::ONE {
+            return Err(ConfigError::Invalid(format!(
+                "{key} must be in (0, 1], got {v}"
+            )));
+        }
+    }
+    if cfg.risk.cash_tolerance < Decimal::ZERO {
+        return Err(ConfigError::Invalid(format!(
+            "risk.cash_tolerance must be at least 0, got {}",
+            cfg.risk.cash_tolerance
+        )));
+    }
+    let counts = [
+        ("stats.periods_per_year", cfg.stats.periods_per_year),
+        ("strategy.vol_com_days", cfg.strategy.vol_com_days),
+        ("strategy.vol_annualization", cfg.strategy.vol_annualization),
+    ];
+    for (key, v) in counts {
+        if v == 0 {
+            return Err(ConfigError::Invalid(format!("{key} must be positive")));
+        }
+    }
+    for (key, spec) in [
+        ("cost.research", &cfg.cost.research),
+        ("cost.shadow", &cfg.cost.shadow),
+    ] {
+        spec.validate()
+            .map_err(|e| ConfigError::Invalid(format!("{key}: {e}")))?;
+    }
+    let risk_free = &cfg.strategy.risk_free_symbol;
+    Symbol::new(risk_free).map_err(|e| {
+        ConfigError::Invalid(format!("strategy.risk_free_symbol \"{risk_free}\": {e}"))
+    })?;
     let feed = cfg.data.feed.as_str();
     let imported = feed.strip_prefix("csv:").is_some_and(|n| !n.is_empty());
     if feed != "sip" && feed != "iex" && !imported {
@@ -327,6 +403,9 @@ fn validate(cfg: &Config) -> Result<(), ConfigError> {
                 inst.symbol
             )));
         }
+        Symbol::new(&inst.symbol).map_err(|e| {
+            ConfigError::Invalid(format!("universe symbol \"{}\": {e}", inst.symbol))
+        })?;
         if inst.symbol == cfg.strategy.risk_free_symbol {
             return Err(ConfigError::Invalid(format!(
                 "universe must not contain the risk-free symbol \"{}\"",
