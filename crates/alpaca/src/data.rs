@@ -45,7 +45,16 @@ pub fn daily_bars(
             Some(t) => format!("{query}&page_token={}", percent_encode(t)),
             None => query.clone(),
         };
-        let body = http.get_data(&url)?;
+        let body = http.get_data(&url).map_err(|e| match e {
+            AlpacaError::Rejected {
+                status: 403,
+                message,
+            } => AlpacaError::FeedNotPermitted {
+                feed: feed.to_string(),
+                message: server_message(&message),
+            },
+            other => other,
+        })?;
         let (bars, next) = parse_page(&body)?;
         out.extend(bars);
         match next {
@@ -56,6 +65,17 @@ pub fn daily_bars(
             Some(n) => token = Some(n),
         }
     }
+}
+
+/// The "message" field of a JSON error body, or the raw text when there is none.
+fn server_message(body: &str) -> String {
+    serde_json::from_str::<serde_json::Value>(body)
+        .ok()
+        .and_then(|v| {
+            v.get("message")
+                .and_then(|m| m.as_str().map(str::to_string))
+        })
+        .unwrap_or_else(|| body.to_string())
 }
 
 /// Percent-encode every byte outside the RFC 3986 unreserved set.
