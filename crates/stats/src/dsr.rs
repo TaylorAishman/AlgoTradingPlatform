@@ -26,3 +26,15 @@ pub fn psr(sr: f64, t: usize, skew: f64, kurt: f64, sr_benchmark: f64) -> Result
     let z = (sr - sr_benchmark) * ((t as f64) - 1.0).sqrt() / denom;
     Ok(norm_cdf(z))
 }
+
+/// Deflated Sharpe Ratio: the PSR against the benchmark `expected_max_sharpe(var_sr, n_trials)`.
+pub fn deflated_sharpe(
+    sr: f64,
+    t: usize,
+    skew: f64,
+    kurt: f64,
+    var_sr: f64,
+    n_trials: u32,
+) -> Result<f64, StatsError> {
+    psr(sr, t, skew, kurt, expected_max_sharpe(var_sr, n_trials))
+}
