@@ -2,7 +2,7 @@
 
 use serde_json::json;
 
-use crate::state::{Recorded, State};
+use crate::state::{Order, Recorded, State};
 
 /// Double a non-negative decimal string exactly (buying power is cash times the
 /// fixed multiplier of 2). Falls back to the input if it is not a plain decimal.
@@ -27,7 +27,10 @@ fn times_two(cash: &str) -> String {
 }
 
 /// Answer a request from the seeded state; anything unseeded is 404.
-pub fn respond(req: &Recorded, state: &State) -> (u16, String) {
+pub fn respond(req: &Recorded, state: &mut State) -> (u16, String) {
+    if req.method == "POST" && req.path == "/v2/orders" {
+        return submit(&req.body, state);
+    }
     if req.method == "GET" {
         match req.path.as_str() {
             "/v2/account" => {
@@ -77,6 +80,21 @@ pub fn respond(req: &Recorded, state: &State) -> (u16, String) {
                 return (200, serde_json::Value::Array(entries).to_string());
             }
             "/v2/stocks/bars" => return bars(&req.query, state),
+            "/v2/orders:by_client_order_id" => {
+                let wanted = req
+                    .query
+                    .split('&')
+                    .filter_map(|kv| kv.split_once('='))
+                    .find(|(name, _)| *name == "client_order_id")
+                    .map(|(_, v)| v);
+                if let Some(o) = state
+                    .orders
+                    .iter()
+                    .find(|o| Some(o.client_order_id.as_str()) == wanted)
+                {
+                    return (200, order_json(o).to_string());
+                }
+            }
             path => {
                 if let Some(sym) = path.strip_prefix("/v2/assets/") {
                     if let Some(a) = state.assets.iter().find(|a| a.symbol == sym) {
@@ -98,6 +116,78 @@ pub fn respond(req: &Recorded, state: &State) -> (u16, String) {
         }
     }
     (404, r#"{"message":"not found"}"#.to_string())
+}
+
+/// The order JSON shape served by the order routes.
+fn order_json(o: &Order) -> serde_json::Value {
+    json!({
+        "id": o.id,
+        "client_order_id": o.client_order_id,
+        "symbol": o.symbol,
+        "qty": o.qty,
+        "side": o.side,
+        "type": o.order_type,
+        "time_in_force": o.time_in_force,
+        "status": o.status,
+        "submitted_at": o.submitted_at,
+        "filled_qty": o.filled_qty,
+    })
+}
+
+/// Whether `s` is a plain non-negative decimal such as `10` or `0.5`.
+fn is_plain_decimal(s: &str) -> bool {
+    let (int, frac) = s.split_once('.').unwrap_or((s, ""));
+    let digits = |p: &str| p.bytes().all(|b| b.is_ascii_digit());
+    !int.is_empty() && digits(int) && digits(frac)
+}
+
+/// Accept a new order, or refuse it with 422 if malformed or a duplicate client order id.
+fn submit(body: &str, state: &mut State) -> (u16, String) {
+    let refuse = |msg: &str| (422, json!({"message": msg}).to_string());
+    let Ok(v) = serde_json::from_str::<serde_json::Value>(body) else {
+        return refuse("invalid order body");
+    };
+    let field = |k: &str| v.get(k).and_then(|x| x.as_str()).map(str::to_string);
+    let (Some(symbol), Some(qty), Some(side), Some(order_type), Some(time_in_force)) = (
+        field("symbol"),
+        field("qty"),
+        field("side"),
+        field("type"),
+        field("time_in_force"),
+    ) else {
+        return refuse("missing order field");
+    };
+    if !is_plain_decimal(&qty) {
+        return refuse("invalid order qty");
+    }
+    if side != "buy" && side != "sell" {
+        return refuse("invalid order side");
+    }
+    let seq = state.orders.len() + 1;
+    let id = format!("00000000-0000-4000-8000-{seq:012}");
+    let client_order_id = field("client_order_id").unwrap_or_else(|| id.clone());
+    if state
+        .orders
+        .iter()
+        .any(|o| o.client_order_id == client_order_id)
+    {
+        return refuse("client_order_id must be unique");
+    }
+    let order = Order {
+        id,
+        client_order_id,
+        symbol,
+        qty,
+        side,
+        order_type,
+        time_in_force,
+        status: "accepted".to_string(),
+        submitted_at: state.stamp(seq),
+        filled_qty: "0".to_string(),
+    };
+    let text = order_json(&order).to_string();
+    state.orders.push(order);
+    (200, text)
 }
 
 /// The answer to a request missing either auth header.

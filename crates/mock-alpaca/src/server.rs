@@ -62,7 +62,7 @@ impl MockAlpaca {
                     let (status, text) = if let Some(code) = injected {
                         (code, r#"{"message":"injected failure"}"#.to_string())
                     } else if authed {
-                        routes::respond(&rec, &st)
+                        routes::respond(&rec, &mut st)
                     } else {
                         routes::unauthorized()
                     };
