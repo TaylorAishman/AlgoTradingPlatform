@@ -129,9 +129,35 @@ pub fn respond(req: &Recorded, state: &mut State) -> (u16, String) {
                 return (200, serde_json::Value::Array(list).to_string());
             }
             "/v2/account/activities/FILL" => {
-                let list: Vec<_> = state
-                    .activities
-                    .iter()
+                let after = query_param(&req.query, "after")
+                    .and_then(|a| chrono::DateTime::parse_from_rfc3339(&a).ok());
+                let size = query_param(&req.query, "page_size")
+                    .and_then(|l| l.parse::<usize>().ok())
+                    .unwrap_or(100)
+                    .clamp(1, 100);
+                let mut matched: Vec<_> = state.activities.iter().collect();
+                if query_param(&req.query, "direction").as_deref() == Some("desc") {
+                    matched.reverse();
+                }
+                if let Some(token) = query_param(&req.query, "page_token") {
+                    match matched.iter().position(|a| a.id == token) {
+                        Some(i) => {
+                            matched.drain(..=i);
+                        }
+                        None => {
+                            return (422, json!({"message": "unknown page_token"}).to_string());
+                        }
+                    }
+                }
+                if let Some(t) = after {
+                    matched.retain(|a| {
+                        chrono::DateTime::parse_from_rfc3339(&a.transaction_time)
+                            .is_ok_and(|x| x > t)
+                    });
+                }
+                let list: Vec<_> = matched
+                    .into_iter()
+                    .take(size)
                     .map(|a| {
                         json!({
                             "id": a.id,
