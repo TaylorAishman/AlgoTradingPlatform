@@ -76,6 +76,7 @@ pub fn respond(req: &Recorded, state: &State) -> (u16, String) {
                     .collect();
                 return (200, serde_json::Value::Array(entries).to_string());
             }
+            "/v2/stocks/bars" => return bars(&req.query, state),
             path => {
                 if let Some(sym) = path.strip_prefix("/v2/assets/") {
                     if let Some(a) = state.assets.iter().find(|a| a.symbol == sym) {
@@ -102,4 +103,62 @@ pub fn respond(req: &Recorded, state: &State) -> (u16, String) {
 /// The answer to a request missing either auth header.
 pub fn unauthorized() -> (u16, String) {
     (401, r#"{"message":"forbidden."}"#.to_string())
+}
+
+/// Serve seeded bars; `page_token` is the offset of the next bar in the filtered, ordered list.
+fn bars(query: &str, state: &State) -> (u16, String) {
+    let param = |k: &str| {
+        query
+            .split('&')
+            .filter_map(|kv| kv.split_once('='))
+            .find(|(name, _)| *name == k)
+            .map(|(_, v)| v.replace("%2C", ",").replace("%2c", ","))
+    };
+    let symbols: Vec<String> = param("symbols")
+        .map(|s| s.split(',').map(str::to_string).collect())
+        .unwrap_or_default();
+    let adjustment = param("adjustment").unwrap_or_else(|| "raw".to_string());
+    let feed = param("feed").unwrap_or_else(|| "sip".to_string());
+    let start = param("start").map(|s| s.chars().take(10).collect::<String>());
+    let end = param("end").map(|s| s.chars().take(10).collect::<String>());
+    let limit = param("limit")
+        .and_then(|l| l.parse::<usize>().ok())
+        .unwrap_or(1000)
+        .clamp(1, 10000);
+    let offset = param("page_token")
+        .and_then(|t| t.parse::<usize>().ok())
+        .unwrap_or(0);
+    let mut matched: Vec<_> = state
+        .bars
+        .iter()
+        .filter(|b| b.adjustment == adjustment && b.feed == feed)
+        .filter(|b| symbols.contains(&b.symbol))
+        .filter(|b| start.as_ref().is_none_or(|s| b.date.as_str() >= s.as_str()))
+        .filter(|b| end.as_ref().is_none_or(|e| b.date.as_str() <= e.as_str()))
+        .collect();
+    matched.sort_by(|a, b| (&a.symbol, &a.date).cmp(&(&b.symbol, &b.date)));
+    let page: Vec<_> = matched.iter().skip(offset).take(limit).collect();
+    let next = offset + page.len();
+    let mut out = serde_json::Map::new();
+    for b in page {
+        let entry = out
+            .entry(b.symbol.clone())
+            .or_insert_with(|| serde_json::Value::Array(Vec::new()));
+        if let Some(arr) = entry.as_array_mut() {
+            arr.push(json!({
+                "t": format!("{}T05:00:00Z", b.date),
+                "o": b.open, "h": b.high, "l": b.low, "c": b.close,
+                "v": b.volume, "n": 1, "vw": b.close,
+            }));
+        }
+    }
+    let token = if next < matched.len() {
+        json!(next.to_string())
+    } else {
+        serde_json::Value::Null
+    };
+    (
+        200,
+        json!({"bars": out, "next_page_token": token}).to_string(),
+    )
 }

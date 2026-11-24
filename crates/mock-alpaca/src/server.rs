@@ -5,7 +5,7 @@ use std::thread::JoinHandle;
 
 use crate::routes;
 pub use crate::state::Recorded;
-use crate::state::{Asset, Clock, State};
+use crate::state::{Asset, Bar, Clock, State};
 
 /// A mock Alpaca server bound to 127.0.0.1 on a free port.
 pub struct MockAlpaca {
@@ -118,6 +118,31 @@ impl MockAlpaca {
             shortable,
             easy_to_borrow,
         });
+    }
+
+    /// Seed daily bars for one adjustment and feed, appended to earlier seeds.
+    /// Each tuple is (symbol, date, open, high, low, close, volume).
+    #[allow(clippy::type_complexity)]
+    pub fn seed_bars(
+        &self,
+        adjustment: &str,
+        feed: &str,
+        bars: Vec<(String, String, f64, f64, f64, f64, u64)>,
+    ) {
+        let mut st = self.state.lock().unwrap_or_else(|e| e.into_inner());
+        for (symbol, date, open, high, low, close, volume) in bars {
+            st.bars.push(Bar {
+                adjustment: adjustment.to_string(),
+                feed: feed.to_string(),
+                symbol,
+                date,
+                open,
+                high,
+                low,
+                close,
+                volume,
+            });
+        }
     }
 
     /// Every request received so far, oldest first.
