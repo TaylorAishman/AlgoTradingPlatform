@@ -31,4 +31,16 @@ impl TradingCalendar {
     pub fn is_session(&self, date: NaiveDate) -> bool {
         self.sessions.binary_search(&date).is_ok()
     }
+
+    /// The first session strictly after `date`, or `None` past the end of the calendar.
+    pub fn next_session(&self, date: NaiveDate) -> Option<NaiveDate> {
+        let i = self.sessions.partition_point(|&s| s <= date);
+        self.sessions.get(i).copied()
+    }
+
+    /// The last session strictly before `date`, or `None` before the start of the calendar.
+    pub fn prev_session(&self, date: NaiveDate) -> Option<NaiveDate> {
+        let i = self.sessions.partition_point(|&s| s < date);
+        i.checked_sub(1).map(|j| self.sessions[j])
+    }
 }
