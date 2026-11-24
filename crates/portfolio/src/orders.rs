@@ -39,9 +39,10 @@ pub fn target_shares(
 
 /// Orders that trade the difference between current and target shares.
 ///
-/// One leg-1 order per symbol whose share count changes, sorted by symbol. A sign flip is
+/// One leg-1 order per symbol whose share count changes. A sign flip is
 /// two orders: leg 1 closes to zero, leg 2 opens the new side. A held symbol
 /// absent from `target` is closed to zero.
+/// Output order: leg 1 sells, leg 1 buys, leg 2 sells, leg 2 buys, each group sorted by symbol.
 /// The side follows the sign of `target - current`; the reference price comes from `prices`.
 pub fn plan_orders(
     current: &Positions,
@@ -79,5 +80,7 @@ pub fn plan_orders(
             out.push(order);
         }
     }
+    // Stable sort keeps symbols sorted within each (leg, side) group.
+    out.sort_by_key(|o| (o.leg, o.side != Side::Sell));
     Ok(out)
 }
