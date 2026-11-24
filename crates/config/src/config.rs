@@ -4,6 +4,8 @@ use chrono::NaiveDate;
 use rust_decimal::Decimal;
 use serde::{Deserialize, Deserializer};
 
+use pt_core::cost::CostSpec;
+
 use crate::error::ConfigError;
 
 /// The asset class of a universe instrument.
@@ -157,7 +159,73 @@ impl Default for StatsCfg {
     }
 }
 
-/// The whole configuration (cost and signoff come later).
+/// Serde mirror of `CostSpec`; a missing key falls back to the spec's default.
+#[derive(Deserialize)]
+#[serde(deny_unknown_fields)]
+struct CostSpecRaw {
+    spread_bps: Option<Decimal>,
+    fee_bps: Option<Decimal>,
+    impact_coeff: Option<Decimal>,
+    borrow_bps_annual: Option<Decimal>,
+}
+
+impl CostSpecRaw {
+    fn over(self, base: CostSpec) -> CostSpec {
+        CostSpec {
+            spread_bps: self.spread_bps.unwrap_or(base.spread_bps),
+            fee_bps: self.fee_bps.unwrap_or(base.fee_bps),
+            impact_coeff: self.impact_coeff.unwrap_or(base.impact_coeff),
+            borrow_bps_annual: self.borrow_bps_annual.unwrap_or(base.borrow_bps_annual),
+        }
+    }
+}
+
+fn research_default() -> CostSpec {
+    CostSpec {
+        spread_bps: Decimal::new(5, 0),
+        fee_bps: Decimal::ZERO,
+        impact_coeff: Decimal::ONE,
+        borrow_bps_annual: Decimal::new(50, 0),
+    }
+}
+
+fn shadow_default() -> CostSpec {
+    CostSpec {
+        spread_bps: Decimal::new(5, 0),
+        fee_bps: Decimal::ZERO,
+        impact_coeff: Decimal::ZERO,
+        borrow_bps_annual: Decimal::ZERO,
+    }
+}
+
+fn research_spec<'de, D: Deserializer<'de>>(d: D) -> Result<CostSpec, D::Error> {
+    Ok(CostSpecRaw::deserialize(d)?.over(research_default()))
+}
+
+fn shadow_spec<'de, D: Deserializer<'de>>(d: D) -> Result<CostSpec, D::Error> {
+    Ok(CostSpecRaw::deserialize(d)?.over(shadow_default()))
+}
+
+/// The two cost models: research (historical backtests) and shadow.
+#[derive(Debug, Clone, PartialEq, Eq, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct CostCfg {
+    #[serde(default = "research_default", deserialize_with = "research_spec")]
+    pub research: CostSpec,
+    #[serde(default = "shadow_default", deserialize_with = "shadow_spec")]
+    pub shadow: CostSpec,
+}
+
+impl Default for CostCfg {
+    fn default() -> Self {
+        Self {
+            research: research_default(),
+            shadow: shadow_default(),
+        }
+    }
+}
+
+/// The whole configuration (signoff comes later).
 #[derive(Debug, Clone, PartialEq, Eq, Deserialize)]
 #[serde(deny_unknown_fields)]
 pub struct Config {
@@ -173,6 +241,8 @@ pub struct Config {
     pub risk: RiskCfg,
     #[serde(default)]
     pub stats: StatsCfg,
+    #[serde(default)]
+    pub cost: CostCfg,
     pub universe: Vec<Instrument>,
 }
 
