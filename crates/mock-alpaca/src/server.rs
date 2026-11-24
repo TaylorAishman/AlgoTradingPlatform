@@ -218,6 +218,24 @@ impl MockAlpaca {
         });
     }
 
+    /// Mark the order expired. Changes no position and no cash.
+    /// Panics on an unknown order.
+    pub fn expire(&self, client_order_id: &str) {
+        self.set_order_status(client_order_id, "expired");
+    }
+
+    /// Set the order's status to any text; lookup and list both show it.
+    /// Panics on an unknown order.
+    pub fn set_order_status(&self, client_order_id: &str, status: &str) {
+        let mut st = self.state.lock().unwrap_or_else(|e| e.into_inner());
+        let o = st
+            .orders
+            .iter_mut()
+            .find(|o| o.client_order_id == client_order_id)
+            .expect("an order with that client_order_id");
+        o.status = status.to_string();
+    }
+
     /// Answer bars requests for `feed` with 403.
     pub fn deny_feed(&self, feed: &str) {
         let mut st = self.state.lock().unwrap_or_else(|e| e.into_inner());
