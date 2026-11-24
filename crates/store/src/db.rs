@@ -12,7 +12,10 @@ use crate::error::StoreError;
 
 /// Schema migrations in order. Migration `i` (zero-based) brings the schema
 /// to version `i + 1`.
-const MIGRATIONS: &[&str] = &[include_str!("../migrations/0001_market.sql")];
+const MIGRATIONS: &[&str] = &[
+    include_str!("../migrations/0001_market.sql"),
+    include_str!("../migrations/0002_trading.sql"),
+];
 
 impl From<rusqlite::Error> for StoreError {
     fn from(e: rusqlite::Error) -> Self {
