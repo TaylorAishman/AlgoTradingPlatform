@@ -1,0 +1,24 @@
+[package]
+name = "pt-alpaca"
+description = "Thin blocking REST client for the Alpaca paper trading and market data APIs"
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+publish.workspace = true
+
+[lints]
+workspace = true
+
+[dependencies]
+chrono.workspace = true
+pt-gate.workspace = true
+rust_decimal.workspace = true
+serde.workspace = true
+serde_json.workspace = true
+thiserror.workspace = true
+ureq.workspace = true
+
+[dev-dependencies]
+pt-mock-alpaca.workspace = true
+tiny_http.workspace = true
