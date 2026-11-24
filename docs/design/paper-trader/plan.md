@@ -176,6 +176,7 @@ How to read the tables:
 | E07 | alpaca-http | Retry 429 after fixed waits | R-085 | sonnet | crates/alpaca/src/http.rs, crates/alpaca/tests/retry_429.rs | cargo test -p pt-alpaca --test retry_429 |
 | E08 | alpaca-http | Retry 5xx with doubling waits | R-086 | sonnet | crates/alpaca/src/http.rs, crates/alpaca/tests/retry_5xx.rs | cargo test -p pt-alpaca --test retry_5xx |
 | E09 | alpaca-http | Report other 4xx without retrying | R-087 | sonnet | crates/alpaca/src/http.rs, crates/alpaca/tests/no_retry_4xx.rs | cargo test -p pt-alpaca --test no_retry_4xx |
+| E25 | alpaca-data | Add HttpClient::get_data, a GET on the market data base URL | R-082 | sonnet | crates/alpaca/src/http.rs, crates/alpaca/tests/http_data_host.rs | cargo test -p pt-alpaca --test http_data_host |
 | E10 | alpaca-data | Send the documented daily-bars query | R-088 | sonnet | crates/alpaca/src/data.rs, crates/alpaca/tests/bars_query.rs | cargo test -p pt-alpaca --test bars_query |
 | E11 | alpaca-data | Parse the bars response into WireBar | R-089 | sonnet | crates/alpaca/src/data.rs, crates/alpaca/tests/fixtures/bars.json, crates/alpaca/tests/bars_parse.rs | cargo test -p pt-alpaca --test bars_parse |
 | E12 | alpaca-data | Refuse a daily bar that is not at New York midnight | R-091 | sonnet | crates/alpaca/src/data.rs, crates/alpaca/tests/bar_time.rs | cargo test -p pt-alpaca --test bar_time |
@@ -433,7 +434,7 @@ Wave | Chains that can run together
 1 | workspace (6)
 2 | core-types (6), core-state (2), calendar (4), secrets (4), stats-descriptive (5), stats-normal (2), stats-pbo (6), alpaca-endpoints (4), mock-reference (6), store-codec (1), store-schema (5), gate-owner (4), strategy-vol (3), ops-logging (1), ops-pnl (2), live-lock (1), cli-deploy (1)
 3 | core-view (3), calendar-months (3), config (10), stats-dsr (4), vector (4), alpaca-http (5), mock-orders (6), store-market (5), store-orders (4), store-shadow (1), store-ops (5), gate-authorize (6), gate-status (1), portfolio-orders (6), risk (6), engine-cost (4), live-ids (2)
-4 | config-hash (1), alpaca-data (5), alpaca-account (4), alpaca-orders-read (3), store-ledger (3), strategy-risk (4), strategy-tsmom (6), portfolio-weights (5), engine-sim (5), data-view (3), data-import (3), ops-alerts (4)
+4 | config-hash (1), alpaca-data (6), alpaca-account (4), alpaca-orders-read (3), store-ledger (3), strategy-risk (4), strategy-tsmom (6), portfolio-weights (5), engine-sim (5), data-view (3), data-import (3), ops-alerts (4)
 5 | alpaca-write (3), store-append-only (1), strategy-benchmark (1), engine-decide (6), engine-sim-guards (4), data-quality (2), data-reference (2), data-doctor (2), ops-report (6), live-context (2), shadow-slippage (2), cli-base (6)
 6 | engine-backtest (4), data-ingest (6), data-universe (2), live-submit (5), live-reconcile (5), live-snapshots (3), shadow-daily (3), shadow-replay (3), cli-import (2)
 7 | validate-backtest (5), live-settle (4), live-rebalance (4), shadow-fidelity (3), cli-data (3)
@@ -445,7 +446,7 @@ Wave | Chains that can run together
 13 | cli-ops (4)
 14 | cli-e2e (2)
 
-87 chains, 317 steps. Widest wave: 17 chains. Longest chain: 10 steps.
+87 chains, 318 steps. Widest wave: 17 chains. Longest chain: 10 steps.
 
 What the waves mean in practice:
 
@@ -476,7 +477,7 @@ One line per chain: what to look for when reviewing it.
 - `vector`: This crate must share no accounting code with the engine. Read it against architecture 5.10.5 only.
 - `alpaca-endpoints`: There must be no way to obtain an `Endpoints` value for any non-loopback host other than the two constants.
 - `alpaca-http`: Check that waits go through `Sleeper` (no real sleeping) and that no 4xx other than 429 is retried.
-- `alpaca-data`: Check the query against architecture 5.9 and that prices go through `from_f64_shortest`.
+- `alpaca-data`: Check that bars are asked of the market data base URL and never the trading one (E25, E10), the query against architecture 5.9, and that each price reaches `Decimal` through its shortest round-trip text, inside `data.rs` (see Replans).
 - `alpaca-account`: Numeric fields arrive as strings; check none is parsed through a float.
 - `alpaca-orders-read`: Check paging: fills page by the last activity id, orders by `after`.
 - `alpaca-write`: This is the only code that POSTs an order. Check the permit is consumed and compared before any request is made.
@@ -582,3 +583,35 @@ Tests for C12 to C15:
 - `crates/config/tests/defaults.rs` (written and locked before this replan) is the acceptance test of C05 and of R-031 as a whole. It cannot compile before C05, so it must stay out of the worktree until then.
 
 The chain is ten steps long. Every step writes `crates/config/src/config.rs`, so no part of it can run beside another, and moving the later steps to a new chain would change what the chains listing `config` under After wait for.
+
+### alpaca-data, replan 1: E10 was stuck
+
+E10 ("Send the documented daily-bars query") could not be built inside its Files. Bars live on the market data host (`GET {data}/v2/stocks/bars`, architecture 5.9), and the `HttpClient` that the `alpaca-http` chain built can only reach the trading host: its one public request method is `get_trading`, and the rate limiter, auth and retry code behind it are private to `crates/alpaca/src/http.rs`. Calling `get_trading` from `data.rs` would send bar requests to the paper trading host in production, and a test that points both endpoint overrides at one listener would not notice.
+
+The chain gets one new first step, E25, which adds the missing request method. E10 to E14 keep their rows. Requirements and architecture are unchanged.
+
+E25:
+
+- Add `pub fn get_data(&self, path_and_query: &str) -> Result<String, AlpacaError>` to `HttpClient`. It prefixes `endpoints.data()` and calls the same private `get` as `get_trading`. The limiter slot, the auth headers, the 429 and 5xx waits and the 4xx report then hold for the data host with no new code. Do not copy the retry loop.
+- It must be `pub`, as `get_trading` is. A test file sees only `pub` items, and a `pub(crate)` method that nothing calls yet fails the dead-code lint.
+- Its test builds the client with `HttpClient::new` and two different overrides: the data override is a `common::Listener`, the trading override is a loopback URL where nothing listens (for example `http://127.0.0.1:1`). It asserts that `get_data` returns the body served, and that the listener saw one GET with the path and query passed in and both auth headers (R-082).
+- Assert the `Ok` before calling `Listener::finish`. A request sent to the wrong host then fails the test at once with a transport error. `finish` waits for a request that never comes.
+
+E10 to E14, checked against what `data.rs` can reach after E25:
+
+- E10: `daily_bars` builds the query and calls `get_data`. Its test uses the same two different overrides and asserts `daily_bars` returned `Ok` before `finish`, so it proves the host as well as the query. A `bars_query.rs` written before this replan points both overrides at one listener; change that before E10 is committed.
+- E11: `pt-alpaca` does not depend on `pt-core` (architecture section 4) and this chain may not edit `Cargo.toml`, so `Price::from_f64_shortest` is out of reach. The rule of architecture D-11 is applied inside `data.rs`: each price becomes a `Decimal` by parsing the shortest round-trip text of the `f64`. A derived `Deserialize` with `Decimal` fields does exactly that for JSON numbers (rust_decimal 1.43.0, as locked), and so does `Decimal::from_str(&x.to_string())`. Nothing may do arithmetic on the `f64`.
+- E12: the rule is the one in architecture 5.9: a time of day of 04:00:00Z or 05:00:00Z, and the UTC date. `chrono` alone is enough; no time zone database is declared and none is needed.
+- E13: each page is one more `get_data` call with `page_token` added to the query, so each page takes a limiter slot.
+- E14: a 403 comes back from `get_data` as `AlpacaError::Rejected { status: 403, message }` after one request, with the raw body as `message`. `data.rs` turns it into `FeedNotPermitted` and reads the server message from the body.
+
+Other chains:
+
+- Bars are the only call to the market data host in architecture 5.9. `pt-data` (G09 to G14, G20) and `pt-live` reach it only through `daily_bars`, so no other step needs `get_data` or `http.rs`.
+- `MockAlpaca` serves trading and data routes on one base URL, so tests in other crates cannot see a request sent to the wrong host. E25 and E10 are where that is proven.
+- `crates/alpaca/src/http.rs` now belongs to `alpaca-http` and then `alpaca-data`. `alpaca-account` and `alpaca-orders-read` run beside `alpaca-data` and must not touch it; `get_trading` is all they need.
+- Not changed here, because it is another chain: `alpaca-write` has the same kind of gap. E22 needs a POST and E24 a DELETE on the trading host, `HttpClient` has neither, and neither step lists `http.rs`. A POST must also skip the 5xx retries (R-101). That chain needs its own replan before it starts. Two things to carry into it: the POST helper must be `pub(crate)`, because a public one would let any crate send an order without a permit (architecture D-17), so it has to arrive in the same step as `submit_order`; and `alpaca-write` then shares `http.rs` with this chain, so it needs `alpaca-data` under After.
+
+Architecture 5.5 shows `HttpClient` with `new` only and names no request method. That is not the cause of this replan and is left as it is: the request methods are called only by `pt-alpaca`'s own modules, and 5.9 already says which host each endpoint is on. It did leave them without a home, since a step builds only the section 5 signatures its text names. The next revision of the architecture should add to 5.5: `pub fn get_trading(&self, path_and_query: &str) -> Result<String, AlpacaError>` and `pub fn get_data(&self, path_and_query: &str) -> Result<String, AlpacaError>`, with the note that write verbs stay `pub(crate)`.
+
+The chain is six steps long. E25 is the only step that touches `http.rs`; E10 to E14 all write `data.rs` and build on one another, so none can move to a chain of its own.
