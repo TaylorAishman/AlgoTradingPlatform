@@ -1,1 +1,122 @@
+//! Authenticated blocking HTTP client behind the rate limiter.
 
+use std::fmt;
+use std::sync::Arc;
+use std::time::Duration;
+
+use crate::auth::Credentials;
+use crate::endpoints::Endpoints;
+use crate::error::AlpacaError;
+use crate::limiter::{RateLimiter, Sleeper, SystemClock, ThreadSleeper};
+
+/// Waits before each retry after a 429 reply (R-085).
+const RATE_LIMIT_WAITS_SECS: [u64; 4] = [15, 30, 45, 60];
+
+/// Waits before each retry after a 5xx reply (R-086).
+const SERVER_ERROR_WAITS_SECS: [u64; 4] = [1, 2, 4, 8];
+
+/// Sends every request with the auth headers, after taking a rate limiter slot.
+pub struct HttpClient {
+    endpoints: Endpoints,
+    creds: Credentials,
+    limiter: RateLimiter,
+    sleeper: Arc<dyn Sleeper>,
+    agent: ureq::Agent,
+}
+
+impl fmt::Debug for HttpClient {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        f.debug_struct("HttpClient")
+            .field("endpoints", &self.endpoints)
+            .finish_non_exhaustive()
+    }
+}
+
+/// A client for tests: both base URLs point at `url`, which must be a loopback
+/// host. Any other host is refused with `EndpointNotAllowed`.
+pub fn loopback_client(url: &str) -> Result<HttpClient, AlpacaError> {
+    let endpoints = Endpoints::with_overrides(Some(url), Some(url))?;
+    let sleeper: Arc<dyn Sleeper> = Arc::new(ThreadSleeper);
+    let limiter = RateLimiter::new(200, Arc::new(SystemClock::new()), sleeper.clone());
+    let creds = Credentials::new("loopback-key".to_string(), "loopback-secret".to_string());
+    Ok(HttpClient::new(endpoints, creds, limiter, sleeper))
+}
+
+impl HttpClient {
+    pub fn new(
+        endpoints: Endpoints,
+        creds: Credentials,
+        limiter: RateLimiter,
+        sleeper: Arc<dyn Sleeper>,
+    ) -> Self {
+        let agent: ureq::Agent = ureq::Agent::config_builder()
+            .http_status_as_error(false)
+            .build()
+            .into();
+        Self {
+            endpoints,
+            creds,
+            limiter,
+            sleeper,
+            agent,
+        }
+    }
+
+    /// The configured endpoints.
+    pub fn endpoints(&self) -> &Endpoints {
+        &self.endpoints
+    }
+
+    /// GET `path` on the trading base URL and return the body of a 2xx reply.
+    pub fn get_trading(&self, path: &str) -> Result<String, AlpacaError> {
+        let url = format!("{}{}", self.endpoints.trading(), path);
+        self.get(&url)
+    }
+
+    fn get(&self, url: &str) -> Result<String, AlpacaError> {
+        let mut retries = 0;
+        let mut server_retries = 0;
+        loop {
+            match self.get_once(url) {
+                Err(AlpacaError::RateLimited) if retries < RATE_LIMIT_WAITS_SECS.len() => {
+                    self.sleeper
+                        .sleep(Duration::from_secs(RATE_LIMIT_WAITS_SECS[retries]));
+                    retries += 1;
+                }
+                Err(AlpacaError::Server { .. })
+                    if server_retries < SERVER_ERROR_WAITS_SECS.len() =>
+                {
+                    self.sleeper
+                        .sleep(Duration::from_secs(SERVER_ERROR_WAITS_SECS[server_retries]));
+                    server_retries += 1;
+                }
+                other => return other,
+            }
+        }
+    }
+
+    fn get_once(&self, url: &str) -> Result<String, AlpacaError> {
+        self.limiter.acquire();
+        let mut resp = self
+            .agent
+            .get(url)
+            .header("APCA-API-KEY-ID", self.creds.key_id())
+            .header("APCA-API-SECRET-KEY", self.creds.secret_key())
+            .call()
+            .map_err(|e| AlpacaError::Transport(e.to_string()))?;
+        let status = resp.status().as_u16();
+        let body = resp
+            .body_mut()
+            .read_to_string()
+            .map_err(|e| AlpacaError::Transport(e.to_string()))?;
+        match status {
+            200..=299 => Ok(body),
+            429 => Err(AlpacaError::RateLimited),
+            500..=599 => Err(AlpacaError::Server { status }),
+            _ => Err(AlpacaError::Rejected {
+                status,
+                message: body,
+            }),
+        }
+    }
+}
