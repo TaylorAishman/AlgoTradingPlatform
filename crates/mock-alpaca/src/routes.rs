@@ -117,8 +117,14 @@ fn bars(query: &str, state: &State) -> (u16, String) {
     let symbols: Vec<String> = param("symbols")
         .map(|s| s.split(',').map(str::to_string).collect())
         .unwrap_or_default();
-    let adjustment = param("adjustment").unwrap_or_else(|| "raw".to_string());
     let feed = param("feed").unwrap_or_else(|| "sip".to_string());
+    if state.denied_feeds.contains(&feed) {
+        return (
+            403,
+            r#"{"message":"subscription does not permit querying recent SIP data"}"#.to_string(),
+        );
+    }
+    let adjustment = param("adjustment").unwrap_or_else(|| "raw".to_string());
     let start = param("start").map(|s| s.chars().take(10).collect::<String>());
     let end = param("end").map(|s| s.chars().take(10).collect::<String>());
     let limit = param("limit")

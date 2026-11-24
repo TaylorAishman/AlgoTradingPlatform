@@ -52,7 +52,16 @@ impl MockAlpaca {
                         body,
                     };
                     let mut st = state.lock().unwrap_or_else(|e| e.into_inner());
-                    let (status, text) = if authed {
+                    let injected = match st.fail_next {
+                        Some((n, code)) if n > 0 => {
+                            st.fail_next = (n > 1).then_some((n - 1, code));
+                            Some(code)
+                        }
+                        _ => None,
+                    };
+                    let (status, text) = if let Some(code) = injected {
+                        (code, r#"{"message":"injected failure"}"#.to_string())
+                    } else if authed {
                         routes::respond(&rec, &st)
                     } else {
                         routes::unauthorized()
@@ -143,6 +152,22 @@ impl MockAlpaca {
                 volume,
             });
         }
+    }
+
+    /// Answer bars requests for `feed` with 403.
+    pub fn deny_feed(&self, feed: &str) {
+        let mut st = self.state.lock().unwrap_or_else(|e| e.into_inner());
+        if !st.denied_feeds.iter().any(|f| f == feed) {
+            st.denied_feeds.push(feed.to_string());
+        }
+    }
+
+    /// Answer the next `n` requests with `status`; they are still recorded.
+    pub fn fail_next(&self, n: u32, status: u16) {
+        self.state
+            .lock()
+            .unwrap_or_else(|e| e.into_inner())
+            .fail_next = (n > 0).then_some((n, status));
     }
 
     /// Every request received so far, oldest first.

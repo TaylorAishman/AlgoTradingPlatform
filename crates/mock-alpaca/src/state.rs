@@ -53,4 +53,8 @@ pub struct State {
     pub sessions: Vec<String>,
     pub assets: Vec<Asset>,
     pub bars: Vec<Bar>,
+    /// Feeds whose bars are answered 403.
+    pub denied_feeds: Vec<String>,
+    /// Injected failures: (requests left, status).
+    pub fail_next: Option<(u32, u16)>,
 }
