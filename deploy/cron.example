@@ -1,0 +1,7 @@
+# Example crontab for the paper trader. Copy, adjust paths, then install with `crontab -e`.
+# Keys and the webhook are read from the environment or a file you source yourself;
+# do not put them in this file.
+CRON_TZ=America/New_York
+0 8 * * 1-5 /usr/local/bin/trader run >> "$HOME/paper-trader/run.log" 2>&1
+45 9 * * 1-5 /usr/local/bin/trader run >> "$HOME/paper-trader/run.log" 2>&1
+30 17 * * 1-5 /usr/local/bin/trader run >> "$HOME/paper-trader/run.log" 2>&1
