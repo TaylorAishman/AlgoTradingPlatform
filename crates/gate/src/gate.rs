@@ -111,7 +111,7 @@ impl Gate {
 
     /// Authorise one order. Fails closed: below `FirstOrder` the stage forbids
     /// it, and in `Paper` the strategy must be on the allowlist exactly.
-    /// The `FirstOrder` stage refuses every order until its rules exist.
+    /// In `FirstOrder` only the single approved order may go, once.
     pub fn authorize(
         &self,
         order: &OrderSummary,
@@ -128,9 +128,8 @@ impl Gate {
         if self.owner.account_flat_confirmed_on.is_none() {
             return Err(GateError::FlatNotConfirmed);
         }
-        // The first-order rules are not built yet: refuse until they are.
         if self.owner.stage == Stage::FirstOrder {
-            return Err(GateError::StageForbids);
+            return self.authorize_first_order(order, ctx);
         }
         if !self.owner.strategy_allowlist.contains(&ctx.strategy_id) {
             return Err(GateError::StrategyNotAllowed);
@@ -139,6 +138,48 @@ impl Gate {
         // risk-reducing. The flag is the only proof the gate accepts.
         if ctx.halted && !ctx.risk_reducing {
             return Err(GateError::Halted);
+        }
+        Ok(OrderPermit {
+            order: order.clone(),
+        })
+    }
+
+    /// R-268: the `FirstOrder` stage. Fails closed: a permit is issued only for
+    /// the order the owner approved in `[first_order]`, on its day, once. The
+    /// caller has already checked the flat confirmation. The allowlist does not
+    /// apply: the approval itself authorises this one order.
+    fn authorize_first_order(
+        &self,
+        order: &OrderSummary,
+        ctx: &AuthContext,
+    ) -> Result<OrderPermit, GateError> {
+        // Only the first order may go in this stage; no other flag changes that.
+        if !ctx.is_first_order {
+            return Err(GateError::StageForbids);
+        }
+        // The strategy allowlist is not consulted here: the owner adds the
+        // strategy to it only when moving to `Paper`, after this approval. The
+        // exact match against `[first_order]` below is the authorisation.
+        // The first order opens a position in a flat account, so it can never
+        // reduce risk: a halt refuses it whatever the caller's flag says.
+        if ctx.halted {
+            return Err(GateError::Halted);
+        }
+        if ctx.first_order_already_sent {
+            return Err(GateError::FirstOrderAlreadySent);
+        }
+        let Some(approved) = &self.owner.first_order else {
+            return Err(GateError::FirstOrderMismatch);
+        };
+        // Exact comparison: no case or whitespace folding.
+        // A zero quantity is not an order the owner approved.
+        let matches = order.symbol == approved.symbol
+            && order.side == approved.side
+            && order.qty >= 1
+            && order.qty <= approved.max_qty
+            && ctx.today == approved.valid_on;
+        if !matches {
+            return Err(GateError::FirstOrderMismatch);
         }
         Ok(OrderPermit {
             order: order.clone(),
