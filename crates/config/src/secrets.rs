@@ -45,11 +45,34 @@ pub struct ApiKeys {
 /// [`ConfigError::MissingCredentials`] is returned.
 pub fn load_api_keys(env: &BTreeMap<String, String>) -> Result<ApiKeys, ConfigError> {
     let get = |name: &str| env.get(name).filter(|v| !v.is_empty());
-    match (get("APCA_API_KEY_ID"), get("APCA_API_SECRET_KEY")) {
-        (Some(id), Some(secret)) => Ok(ApiKeys {
+    if let (Some(id), Some(secret)) = (get("APCA_API_KEY_ID"), get("APCA_API_SECRET_KEY")) {
+        return Ok(ApiKeys {
             key_id: Secret::new(id.clone()),
             secret_key: Secret::new(secret.clone()),
-        }),
-        _ => Err(ConfigError::MissingCredentials),
+        });
     }
+    match get("PT_SECRETS_FILE") {
+        Some(path) => load_from_file(path),
+        None => Err(ConfigError::MissingCredentials),
+    }
+}
+
+#[derive(serde::Deserialize)]
+struct SecretsFile {
+    key_id: String,
+    secret_key: String,
+}
+
+fn load_from_file(path: &str) -> Result<ApiKeys, ConfigError> {
+    let text = std::fs::read_to_string(path).map_err(|e| ConfigError::Io(e.to_string()))?;
+    // Parse errors may quote file content, so report only the location-free kind.
+    let file: SecretsFile = toml::from_str(&text)
+        .map_err(|_| ConfigError::Parse("secrets file is not valid".to_string()))?;
+    if file.key_id.is_empty() || file.secret_key.is_empty() {
+        return Err(ConfigError::MissingCredentials);
+    }
+    Ok(ApiKeys {
+        key_id: Secret::new(file.key_id),
+        secret_key: Secret::new(file.secret_key),
+    })
 }
