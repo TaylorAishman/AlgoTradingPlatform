@@ -32,7 +32,8 @@ fn to_decimal(x: f64) -> Decimal {
 
 /// Inverse-volatility weights scaled so the portfolio volatility equals `target_vol`.
 ///
-/// `u_i = signal_i / vol_i`, `w_i = u_i * target_vol / sqrt(u' C u)`, rounded to 6 places.
+/// `u_i = signal_i / vol_i`, `w_i = u_i * target_vol / sqrt(u' C u)`, each clamped to
+/// `[-max_weight, max_weight]`, rounded to 6 places.
 /// A symbol without a positive volatility gets weight 0. If the portfolio volatility is
 /// zero, or a covariance entry between two sized symbols is missing, every weight is 0:
 /// no position is taken on risk that cannot be measured.
@@ -66,9 +67,11 @@ pub fn target_weights(
     }
     let scale = p.target_vol / variance.sqrt();
 
+    let cap = to_decimal(p.max_weight.abs());
     let mut weights = zeros;
     for (s, us) in u {
-        weights.insert(s.clone(), round6(to_decimal(us * scale)));
+        let w = to_decimal(us * scale).max(-cap).min(cap);
+        weights.insert(s.clone(), round6(w));
     }
     weights
 }
