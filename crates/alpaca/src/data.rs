@@ -2,7 +2,7 @@
 
 use std::collections::BTreeMap;
 
-use chrono::{DateTime, NaiveDate};
+use chrono::{DateTime, NaiveDate, NaiveTime};
 use rust_decimal::Decimal;
 use serde::Deserialize;
 
@@ -65,10 +65,20 @@ fn parse_page(body: &str) -> Result<Vec<WireBar>, AlpacaError> {
     let mut out = Vec::new();
     for (symbol, bars) in page.bars.unwrap_or_default() {
         for b in bars {
-            let date = DateTime::parse_from_rfc3339(&b.t)
+            let utc = DateTime::parse_from_rfc3339(&b.t)
                 .map_err(|e| AlpacaError::Parse(format!("bar time {}: {e}", b.t)))?
-                .naive_utc()
-                .date();
+                .naive_utc();
+            // Midnight New York is 05:00Z in winter and 04:00Z in summer (R-091).
+            let midnight_ny = [4, 5]
+                .iter()
+                .any(|h| Some(utc.time()) == NaiveTime::from_hms_opt(*h, 0, 0));
+            if !midnight_ny {
+                return Err(AlpacaError::UnexpectedBarTime(format!(
+                    "{symbol} bar at {}",
+                    b.t
+                )));
+            }
+            let date = utc.date();
             out.push(WireBar {
                 symbol: symbol.clone(),
                 date,
