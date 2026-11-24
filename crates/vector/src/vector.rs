@@ -64,11 +64,33 @@ fn validate(inp: &VectorInputs) -> Result<(), VectorError> {
     Ok(())
 }
 
-/// Equity at each date's close. Inputs are validated first.
+/// Equity at each date's close at zero cost. Inputs are validated first.
 ///
-/// The accounting is added in a later step; valid inputs currently
-/// return the initial capital for every date.
+/// On a trade date the target shares are sized from the previous close and
+/// the previous close's equity, truncated toward zero, and filled at the
+/// open. Positions are marked to each close. The first date has no previous
+/// close, so a weights entry there is not traded.
 pub fn vector_equity(inp: &VectorInputs) -> Result<Vec<Decimal>, VectorError> {
     validate(inp)?;
-    Ok(vec![inp.initial_capital; inp.dates.len()])
+    let m = inp.symbols.len();
+    let mut cash = inp.initial_capital;
+    let mut shares = vec![Decimal::ZERO; m];
+    let mut prev_equity = inp.initial_capital;
+    let mut out = Vec::with_capacity(inp.dates.len());
+    for (i, date) in inp.dates.iter().enumerate() {
+        if i > 0 {
+            if let Some(w) = inp.weights.get(date) {
+                for j in 0..m {
+                    let target = (w[j] * prev_equity / inp.close[i - 1][j]).trunc();
+                    let delta = target - shares[j];
+                    cash -= delta * inp.open[i][j];
+                    shares[j] = target;
+                }
+            }
+        }
+        let held: Decimal = shares.iter().zip(&inp.close[i]).map(|(s, p)| s * p).sum();
+        prev_equity = cash + held;
+        out.push(prev_equity);
+    }
+    Ok(out)
 }
