@@ -7,7 +7,7 @@ pub use pt_core::signal::RiskEstimates;
 use pt_core::types::Symbol;
 use pt_core::view::HistoryView;
 
-use crate::vol::ewma_vol;
+use crate::vol::{ewma_cov, ewma_vol};
 
 /// Parameters of the volatility estimate.
 #[derive(Debug, Clone, PartialEq)]
@@ -24,6 +24,7 @@ pub struct VolParams {
 /// `min_obs` returns is ineligible with reason `insufficient_history`. A
 /// symbol missing a session that another symbol has inside the shared window
 /// is ineligible with reason `gap`; zero volatility gives `zero_vol`.
+/// `cov` holds every ordered pair of eligible symbols over the same returns.
 pub fn estimate_risk(
     symbols: &[Symbol],
     asof: NaiveDate,
@@ -45,6 +46,7 @@ pub fn estimate_risk(
     calendar.sort();
     calendar.dedup();
     let window = &calendar[calendar.len().saturating_sub(n)..];
+    let mut eligible_returns: Vec<(Symbol, Vec<f64>)> = Vec::new();
     for s in symbols {
         let closes = view.adj_closes(s, asof, n);
         let returns: Vec<f64> = closes.windows(2).map(|w| w[1].1 / w[0].1 - 1.0).collect();
@@ -67,6 +69,14 @@ pub fn estimate_risk(
             }
             Some(v) => {
                 risk.vols.insert(s.clone(), v);
+                eligible_returns.push((s.clone(), returns));
+            }
+        }
+    }
+    for (x, rx) in &eligible_returns {
+        for (y, ry) in &eligible_returns {
+            if let Some(c) = ewma_cov(rx, ry, p.com_days, p.annualization) {
+                risk.cov.insert((x.clone(), y.clone()), c);
             }
         }
     }
