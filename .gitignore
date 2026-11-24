@@ -3,3 +3,9 @@
 
 # Reference papers stay local (public repo)
 docs/reference/trading-papers/*.pdf
+
+# Build output
+target/
+
+# Run-time data (database, logs, owner files)
+var/
