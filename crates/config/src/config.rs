@@ -1,6 +1,7 @@
 //! The typed configuration. Unknown keys are rejected.
 
 use chrono::NaiveDate;
+use rust_decimal::Decimal;
 use serde::{Deserialize, Deserializer};
 
 use crate::error::ConfigError;
@@ -95,6 +96,50 @@ impl Default for StrategyCfg {
     }
 }
 
+/// Position sizing limits.
+#[derive(Debug, Clone, PartialEq, Eq, Deserialize)]
+#[serde(default, deny_unknown_fields)]
+pub struct SizingCfg {
+    pub target_vol: Decimal,
+    pub max_weight: Decimal,
+    pub max_gross: Decimal,
+}
+
+impl Default for SizingCfg {
+    fn default() -> Self {
+        Self {
+            target_vol: Decimal::new(10, 2),
+            max_weight: Decimal::new(10, 2),
+            max_gross: Decimal::ONE,
+        }
+    }
+}
+
+/// Pre-trade and portfolio risk limits.
+#[derive(Debug, Clone, PartialEq, Eq, Deserialize)]
+#[serde(default, deny_unknown_fields)]
+pub struct RiskCfg {
+    pub max_order_notional: Decimal,
+    pub daily_loss_limit: Decimal,
+    pub max_drawdown: Decimal,
+    pub max_rebalance_delay_sessions: u32,
+    pub min_minutes_before_close: u32,
+    pub cash_tolerance: Decimal,
+}
+
+impl Default for RiskCfg {
+    fn default() -> Self {
+        Self {
+            max_order_notional: Decimal::new(25000, 0),
+            daily_loss_limit: Decimal::new(3, 2),
+            max_drawdown: Decimal::new(15, 2),
+            max_rebalance_delay_sessions: 5,
+            min_minutes_before_close: 30,
+            cash_tolerance: Decimal::new(1, 2),
+        }
+    }
+}
+
 /// Statistics settings.
 #[derive(Debug, Clone, PartialEq, Eq, Deserialize)]
 #[serde(default, deny_unknown_fields)]
@@ -112,7 +157,7 @@ impl Default for StatsCfg {
     }
 }
 
-/// The whole configuration (sizing, risk, cost and signoff come later).
+/// The whole configuration (cost and signoff come later).
 #[derive(Debug, Clone, PartialEq, Eq, Deserialize)]
 #[serde(deny_unknown_fields)]
 pub struct Config {
@@ -122,6 +167,10 @@ pub struct Config {
     pub data: DataCfg,
     #[serde(default)]
     pub strategy: StrategyCfg,
+    #[serde(default)]
+    pub sizing: SizingCfg,
+    #[serde(default)]
+    pub risk: RiskCfg,
     #[serde(default)]
     pub stats: StatsCfg,
     pub universe: Vec<Instrument>,
