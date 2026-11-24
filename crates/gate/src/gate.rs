@@ -126,6 +126,11 @@ impl Gate {
         if !self.owner.strategy_allowlist.contains(&ctx.strategy_id) {
             return Err(GateError::StrategyNotAllowed);
         }
+        // R-266: a halt refuses everything except an order the caller marks as
+        // risk-reducing. The flag is the only proof the gate accepts.
+        if ctx.halted && !ctx.risk_reducing {
+            return Err(GateError::Halted);
+        }
         Ok(OrderPermit {
             order: order.clone(),
         })
