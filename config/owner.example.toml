@@ -1,0 +1,19 @@
+# Example owner file. Copy it outside the repository and edit the copy.
+# Only `stage = "backtest"` is active, which grants nothing.
+
+stage = "backtest"
+
+# Other stages are granted by uncommenting and editing. Replace the active
+# `stage` line above; do not set it twice.
+# Valid stages: backtest, ingest, dry_run, first_order, paper.
+# stage = "paper"
+# strategy_allowlist = ["example_strategy"]
+# account_flat_confirmed_on = 2026-12-01
+# validation_signoff = "signed off by the owner on 2026-12-01"
+# alert_webhook_url = "https://example.invalid/webhook"
+
+# [first_order]
+# symbol = "SPY"
+# side = "buy"
+# max_qty = 1
+# valid_on = 2026-12-02
