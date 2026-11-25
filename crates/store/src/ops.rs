@@ -179,4 +179,41 @@ impl Store {
         }
         Ok(out)
     }
+
+    /// Record an alert and return its id.
+    pub fn record_alert(
+        &self,
+        level: &str,
+        code: &str,
+        message: &str,
+        delivered: bool,
+        at: DateTime<Utc>,
+    ) -> Result<i64, StoreError> {
+        self.conn.execute(
+            "INSERT INTO alerts (level, code, message, delivered, at) \
+             VALUES (?1, ?2, ?3, ?4, ?5)",
+            rusqlite::params![level, code, message, delivered, instant_to_text(at)],
+        )?;
+        Ok(self.conn.last_insert_rowid())
+    }
+
+    /// All alerts as (level, code, message, delivered), oldest first.
+    pub fn alerts(&self) -> Result<Vec<(String, String, String, bool)>, StoreError> {
+        let mut stmt = self
+            .conn
+            .prepare("SELECT level, code, message, delivered FROM alerts ORDER BY id")?;
+        let rows = stmt.query_map([], |r| {
+            Ok((
+                r.get::<_, String>(0)?,
+                r.get::<_, String>(1)?,
+                r.get::<_, String>(2)?,
+                r.get::<_, bool>(3)?,
+            ))
+        })?;
+        let mut out = Vec::new();
+        for row in rows {
+            out.push(row?);
+        }
+        Ok(out)
+    }
 }
