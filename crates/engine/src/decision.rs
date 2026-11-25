@@ -1,7 +1,7 @@
 //! The shared decision function and its parameters.
 
 use crate::error::EngineError;
-use chrono::NaiveDate;
+use chrono::{DateTime, NaiveDate, Utc};
 use pt_config::config::Config;
 use pt_core::money::{Money, Price};
 use pt_core::signal::{RiskEstimates, SignalSet};
@@ -15,6 +15,7 @@ use pt_strategy::strategy::Strategy;
 use rust_decimal::prelude::ToPrimitive;
 use rust_decimal::Decimal;
 use std::collections::{BTreeMap, BTreeSet};
+use std::str::FromStr;
 
 /// What a decision is made from: the dates, the account and the universe.
 #[derive(Debug, Clone, PartialEq)]
@@ -208,4 +209,102 @@ pub fn decision_to_json(d: &Decision) -> String {
         "rejected": rejected,
     });
     value.to_string()
+}
+
+/// A decision's inputs plus where they came from, kept so a run can be replayed.
+#[derive(Debug, Clone, PartialEq)]
+pub struct DecisionRecord {
+    pub inputs: DecisionInputs,
+    pub data_asof: DateTime<Utc>,
+    pub feed: String,
+    pub config_hash: String,
+    pub code_version: String,
+    pub bootstrap: bool,
+}
+
+/// The record as canonical JSON: sorted keys, decimals as strings and the
+/// universe in its given order.
+pub fn record_to_json(r: &DecisionRecord) -> String {
+    let i = &r.inputs;
+    let positions: serde_json::Map<_, _> = i
+        .positions
+        .iter()
+        .map(|(k, v)| (k.to_string(), serde_json::Value::from(*v)))
+        .collect();
+    let value = serde_json::json!({
+        "signal_date": i.signal_date.to_string(),
+        "trade_date": i.trade_date.to_string(),
+        "ref_date": i.ref_date.to_string(),
+        "equity": i.equity.0.to_string(),
+        "positions": positions,
+        "universe": i.universe.iter().map(|s| s.to_string()).collect::<Vec<_>>(),
+        "shortable": i.shortable.iter().map(|s| s.to_string()).collect::<Vec<_>>(),
+        "data_asof": r.data_asof.to_rfc3339(),
+        "feed": r.feed,
+        "config_hash": r.config_hash,
+        "code_version": r.code_version,
+        "bootstrap": r.bootstrap,
+    });
+    value.to_string()
+}
+
+fn bad(what: &str) -> EngineError {
+    EngineError::Invalid(format!("decision record: bad or missing {what}"))
+}
+
+fn text<'a>(v: &'a serde_json::Value, key: &str) -> Result<&'a str, EngineError> {
+    v.get(key).and_then(|x| x.as_str()).ok_or_else(|| bad(key))
+}
+
+fn date(v: &serde_json::Value, key: &str) -> Result<NaiveDate, EngineError> {
+    text(v, key)?.parse().map_err(|_| bad(key))
+}
+
+fn symbols(v: &serde_json::Value, key: &str) -> Result<Vec<Symbol>, EngineError> {
+    v.get(key)
+        .and_then(|x| x.as_array())
+        .ok_or_else(|| bad(key))?
+        .iter()
+        .map(|s| {
+            let s = s.as_str().ok_or_else(|| bad(key))?;
+            Symbol::new(s).map_err(EngineError::from)
+        })
+        .collect()
+}
+
+/// Reads a record written by `record_to_json`.
+pub fn record_from_json(s: &str) -> Result<DecisionRecord, EngineError> {
+    let v: serde_json::Value = serde_json::from_str(s)
+        .map_err(|e| EngineError::Invalid(format!("decision record: {e}")))?;
+    let mut positions = Positions::new();
+    for (k, q) in v
+        .get("positions")
+        .and_then(|x| x.as_object())
+        .ok_or_else(|| bad("positions"))?
+    {
+        positions.insert(Symbol::new(k)?, q.as_i64().ok_or_else(|| bad("positions"))?);
+    }
+    let equity = Decimal::from_str(text(&v, "equity")?).map_err(|_| bad("equity"))?;
+    let data_asof = DateTime::parse_from_rfc3339(text(&v, "data_asof")?)
+        .map_err(|_| bad("data_asof"))?
+        .with_timezone(&Utc);
+    Ok(DecisionRecord {
+        inputs: DecisionInputs {
+            signal_date: date(&v, "signal_date")?,
+            trade_date: date(&v, "trade_date")?,
+            ref_date: date(&v, "ref_date")?,
+            equity: Money(equity),
+            positions,
+            universe: symbols(&v, "universe")?,
+            shortable: symbols(&v, "shortable")?.into_iter().collect(),
+        },
+        data_asof,
+        feed: text(&v, "feed")?.to_string(),
+        config_hash: text(&v, "config_hash")?.to_string(),
+        code_version: text(&v, "code_version")?.to_string(),
+        bootstrap: v
+            .get("bootstrap")
+            .and_then(|x| x.as_bool())
+            .ok_or_else(|| bad("bootstrap"))?,
+    })
 }
