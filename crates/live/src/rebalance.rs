@@ -14,6 +14,7 @@ use pt_config::hash::config_hash;
 use pt_core::money::Money;
 use pt_core::order_state::OrderState;
 use pt_core::types::{PriceBasis, Side, Symbol};
+use pt_core::view::MarketView;
 use pt_data::view::StoreView;
 use pt_engine::decision::{
     decide, decision_to_json, params_from_config, record_to_json, DecisionInputs, DecisionRecord,
@@ -34,6 +35,8 @@ pub enum RebalanceOutcome {
     NotDue,
     /// A decision was recorded with this many planned orders.
     Recorded { decision_id: i64, orders: usize },
+    /// A needed symbol has no stored bar for the reference date; nothing was decided.
+    DataNotReady,
 }
 
 /// Decides the rebalance for the latest month-end signal date whose trade
@@ -104,6 +107,21 @@ pub fn rebalance(ctx: &LiveContext, wire_clock: &WireClock) -> Result<RebalanceO
     let symbols: Vec<Symbol> = symbols.into_iter().collect();
     let feed = ctx.cfg.data.feed.clone();
     let view = StoreView::load(ctx.store, &symbols, &feed, PriceBasis::Raw, None)?;
+    let missing: Vec<&str> = symbols
+        .iter()
+        .filter(|s| view.exec_bar(s, ref_date).is_none())
+        .map(Symbol::as_str)
+        .collect();
+    if !missing.is_empty() {
+        ctx.store.record_alert(
+            "warn",
+            "data_not_ready",
+            &format!("no bar for {} on {ref_date}", missing.join(", ")),
+            false,
+            ctx.clock.now_utc(),
+        )?;
+        return Ok(RebalanceOutcome::DataNotReady);
+    }
     let decision = decide(&inputs, ctx.strategy, &view, &params_from_config(ctx.cfg))?;
 
     let now = ctx.clock.now_utc();
