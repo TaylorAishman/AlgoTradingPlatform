@@ -1,8 +1,12 @@
 //! Repositories for decisions, orders, fills and the ledgers.
 
 use chrono::{DateTime, NaiveDate, SecondsFormat, Utc};
-use rusqlite::{params, Row};
+use pt_core::order_state::OrderState;
+use pt_core::types::{Side, Symbol};
+use rusqlite::{params, params_from_iter, Row};
+use rust_decimal::Decimal;
 
+use crate::codec::{dec_to_text, text_to_dec};
 use crate::db::Store;
 use crate::error::StoreError;
 
@@ -46,6 +50,94 @@ pub struct DecisionRow {
 
 const DECISION_COLUMNS: &str =
     "id, strategy_id, signal_date, trade_date, mode, status, inputs_json, outputs_json, created_at";
+
+/// One order as stored.
+#[derive(Debug, Clone, PartialEq)]
+pub struct OrderRow {
+    pub client_order_id: String,
+    pub decision_id: Option<i64>,
+    pub symbol: Symbol,
+    pub side: Side,
+    pub qty: u64,
+    pub leg: u8,
+    pub state: OrderState,
+    pub broker_order_id: Option<String>,
+    pub filled_qty: u64,
+    pub reference_price: Decimal,
+    pub trade_date: NaiveDate,
+}
+
+const ORDER_COLUMNS: &str = "client_order_id, decision_id, symbol, side, qty, leg, state, \
+     broker_order_id, filled_qty, reference_price, trade_date";
+
+fn side_to_text(s: Side) -> &'static str {
+    match s {
+        Side::Buy => "buy",
+        Side::Sell => "sell",
+    }
+}
+
+fn text_to_side(s: &str) -> Result<Side, StoreError> {
+    match s {
+        "buy" => Ok(Side::Buy),
+        "sell" => Ok(Side::Sell),
+        other => Err(StoreError::Codec(format!("invalid side {other:?}"))),
+    }
+}
+
+fn state_to_text(s: OrderState) -> &'static str {
+    match s {
+        OrderState::Intent => "intent",
+        OrderState::DryRun => "dry_run",
+        OrderState::Submitted => "submitted",
+        OrderState::PartiallyFilled => "partially_filled",
+        OrderState::Filled => "filled",
+        OrderState::Canceled => "canceled",
+        OrderState::Expired => "expired",
+        OrderState::Rejected => "rejected",
+        OrderState::Abandoned => "abandoned",
+    }
+}
+
+fn text_to_state(s: &str) -> Result<OrderState, StoreError> {
+    Ok(match s {
+        "intent" => OrderState::Intent,
+        "dry_run" => OrderState::DryRun,
+        "submitted" => OrderState::Submitted,
+        "partially_filled" => OrderState::PartiallyFilled,
+        "filled" => OrderState::Filled,
+        "canceled" => OrderState::Canceled,
+        "expired" => OrderState::Expired,
+        "rejected" => OrderState::Rejected,
+        "abandoned" => OrderState::Abandoned,
+        other => return Err(StoreError::Codec(format!("invalid order state {other:?}"))),
+    })
+}
+
+fn to_i64(v: u64, what: &str) -> Result<i64, StoreError> {
+    i64::try_from(v).map_err(|_| StoreError::Codec(format!("{what} {v} out of range")))
+}
+
+fn order_from_row(r: &Row<'_>) -> Result<OrderRow, StoreError> {
+    let qty: i64 = r.get(4)?;
+    let leg: i64 = r.get(5)?;
+    let filled: i64 = r.get(8)?;
+    Ok(OrderRow {
+        client_order_id: r.get(0)?,
+        decision_id: r.get(1)?,
+        symbol: Symbol::new(&r.get::<_, String>(2)?)
+            .map_err(|e| StoreError::Codec(format!("invalid symbol: {e}")))?,
+        side: text_to_side(&r.get::<_, String>(3)?)?,
+        qty: u64::try_from(qty).map_err(|_| StoreError::Codec(format!("invalid qty {qty}")))?,
+        leg: u8::try_from(leg).map_err(|_| StoreError::Codec(format!("invalid leg {leg}")))?,
+        state: text_to_state(&r.get::<_, String>(6)?)?,
+        broker_order_id: r.get(7)?,
+        filled_qty: u64::try_from(filled)
+            .map_err(|_| StoreError::Codec(format!("invalid filled_qty {filled}")))?,
+        reference_price: text_to_dec(&r.get::<_, String>(9)?)?,
+        trade_date: text_to_date(&r.get::<_, String>(10)?)?,
+    })
+}
 
 fn date_to_text(d: NaiveDate) -> String {
     d.format("%Y-%m-%d").to_string()
@@ -152,6 +244,68 @@ impl Store {
         let mut out = Vec::new();
         while let Some(r) = rows.next()? {
             out.push(decision_from_row(r)?);
+        }
+        Ok(out)
+    }
+
+    /// Inserts an order. A repeated `client_order_id` is `StoreError::Duplicate`.
+    pub fn insert_order(&self, o: &OrderRow) -> Result<(), StoreError> {
+        let res = self.conn.execute(
+            "INSERT INTO orders (client_order_id, decision_id, symbol, side, qty, leg, state, \
+             broker_order_id, filled_qty, reference_price, trade_date) \
+             VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11)",
+            params![
+                o.client_order_id,
+                o.decision_id,
+                o.symbol.as_str(),
+                side_to_text(o.side),
+                to_i64(o.qty, "qty")?,
+                i64::from(o.leg),
+                state_to_text(o.state),
+                o.broker_order_id,
+                to_i64(o.filled_qty, "filled_qty")?,
+                dec_to_text(o.reference_price),
+                date_to_text(o.trade_date),
+            ],
+        );
+        match res {
+            Ok(_) => Ok(()),
+            Err(rusqlite::Error::SqliteFailure(f, _))
+                if f.extended_code == rusqlite::ffi::SQLITE_CONSTRAINT_PRIMARYKEY =>
+            {
+                Err(StoreError::Duplicate(format!(
+                    "order {}",
+                    o.client_order_id
+                )))
+            }
+            Err(e) => Err(e.into()),
+        }
+    }
+
+    /// The order with this client order id, if stored.
+    pub fn order(&self, client_order_id: &str) -> Result<Option<OrderRow>, StoreError> {
+        let sql = format!("SELECT {ORDER_COLUMNS} FROM orders WHERE client_order_id = ?1");
+        let mut stmt = self.conn.prepare(&sql)?;
+        let mut rows = stmt.query(params![client_order_id])?;
+        match rows.next()? {
+            Some(r) => Ok(Some(order_from_row(r)?)),
+            None => Ok(None),
+        }
+    }
+
+    /// Orders whose state is one of `states`, in insertion order. Empty input gives empty output.
+    pub fn orders_in_states(&self, states: &[OrderState]) -> Result<Vec<OrderRow>, StoreError> {
+        if states.is_empty() {
+            return Ok(Vec::new());
+        }
+        let marks = vec!["?"; states.len()].join(", ");
+        let sql =
+            format!("SELECT {ORDER_COLUMNS} FROM orders WHERE state IN ({marks}) ORDER BY rowid");
+        let mut stmt = self.conn.prepare(&sql)?;
+        let mut rows = stmt.query(params_from_iter(states.iter().map(|s| state_to_text(*s))))?;
+        let mut out = Vec::new();
+        while let Some(r) = rows.next()? {
+            out.push(order_from_row(r)?);
         }
         Ok(out)
     }
