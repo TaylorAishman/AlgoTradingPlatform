@@ -54,10 +54,12 @@ pub fn gates() -> anyhow::Result<i32> {
 pub fn calendar(action: &CalendarCmd) -> anyhow::Result<i32> {
     match action {
         CalendarCmd::Import { csv } => crate::cmd_data::calendar_import(csv),
-        CalendarCmd::Sync => anyhow::bail!("`calendar sync` is not implemented yet"),
+        CalendarCmd::Sync => crate::cmd_data::calendar_sync(),
     }
 }
 
-pub fn universe(_action: &UniverseCmd) -> anyhow::Result<i32> {
-    anyhow::bail!("`universe` is not implemented yet")
+pub fn universe(action: &UniverseCmd) -> anyhow::Result<i32> {
+    match action {
+        UniverseCmd::Verify => crate::cmd_data::universe_verify(),
+    }
 }

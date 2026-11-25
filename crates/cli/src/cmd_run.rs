@@ -1,9 +1,5 @@
-//! `run` and `doctor` commands (stubs).
+//! The `run` command (stub).
 
 pub fn run() -> anyhow::Result<i32> {
     anyhow::bail!("`run` is not implemented yet")
-}
-
-pub fn doctor() -> anyhow::Result<i32> {
-    anyhow::bail!("`doctor` is not implemented yet")
 }
