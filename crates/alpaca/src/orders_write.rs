@@ -1,4 +1,5 @@
-//! Order submission. Sending an order needs an `OrderPermit` (architecture D-17).
+//! Order submission and cancellation. Sending an order needs an `OrderPermit`
+//! (architecture D-17); cancelling one does not (architecture 5.5).
 
 use pt_gate::gate::{OrderPermit, OrderSummary};
 
@@ -46,4 +47,14 @@ pub fn submit_order(
     .to_string();
     let reply = http.post_trading("/v2/orders", &body)?;
     parse_order(&reply)
+}
+
+/// Cancels the order with broker id `broker_order_id` (R-102).
+///
+/// Sends DELETE `/v2/orders/{broker_order_id}`. Any 2xx is `Ok(())` and its
+/// body is ignored. No permit is taken: whether a cancel is allowed is the
+/// caller's check, `Gate::allows(Capability::CancelOrder)`.
+pub fn cancel_order(http: &HttpClient, broker_order_id: &str) -> Result<(), AlpacaError> {
+    http.delete_trading(&format!("/v2/orders/{broker_order_id}"))?;
+    Ok(())
 }

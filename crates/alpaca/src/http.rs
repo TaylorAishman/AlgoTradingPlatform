@@ -155,6 +155,29 @@ impl HttpClient {
             .send(json);
         read_reply(resp)
     }
+
+    /// DELETE `path` on the trading base URL and return the body of a 2xx
+    /// reply. A 429 and a 5xx are retried as for a GET (R-085, R-086);
+    /// cancelling twice cannot create anything. Any other 4xx and a
+    /// transport error are never retried.
+    ///
+    /// `pub(crate)` on purpose: orders are cancelled only through
+    /// `cancel_order`.
+    pub(crate) fn delete_trading(&self, path: &str) -> Result<String, AlpacaError> {
+        let url = format!("{}{}", self.endpoints.trading(), path);
+        self.with_retries(true, || self.delete_once(&url))
+    }
+
+    fn delete_once(&self, url: &str) -> Result<String, AlpacaError> {
+        self.limiter.acquire();
+        let resp = self
+            .agent
+            .delete(url)
+            .header("APCA-API-KEY-ID", self.creds.key_id())
+            .header("APCA-API-SECRET-KEY", self.creds.secret_key())
+            .call();
+        read_reply(resp)
+    }
 }
 
 /// Maps a reply to the body of a 2xx, or to the error for its status.
