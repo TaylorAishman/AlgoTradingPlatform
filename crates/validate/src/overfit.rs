@@ -1,10 +1,15 @@
-//! Overfitting measures over the trial registry: the Deflated Sharpe Ratio of a stored run.
+//! Overfitting measures over the trial registry: the Deflated Sharpe Ratio of a stored run
+//! and the Probability of Backtest Overfitting of a set of stored runs.
+
+use std::collections::{BTreeMap, BTreeSet};
 
 use pt_config::config::Config;
-use pt_stats::descriptive::{kurtosis, skewness, std_sample};
+use pt_stats::descriptive::{kurtosis, returns_from_equity, skewness, std_sample};
 use pt_stats::dsr::{deflated_sharpe, expected_max_sharpe};
+use pt_stats::pbo::{pbo_cscv, PboResult};
 use pt_stats::perf::sharpe;
 use pt_store::db::Store;
+use rust_decimal::prelude::ToPrimitive;
 
 use crate::error::ValidateError;
 use crate::runner::{excess_returns, risk_free_closes};
@@ -64,4 +69,39 @@ pub fn dsr_for_run(
         kurt,
         t,
     })
+}
+
+/// The Probability of Backtest Overfitting of stored runs, on the daily returns of their
+/// equity over the dates all of them share. Columns follow `run_ids`; `s` is the partition count.
+pub fn pbo_for_runs(store: &Store, run_ids: &[i64], s: usize) -> Result<PboResult, ValidateError> {
+    if run_ids.len() < 2 {
+        return Err(ValidateError::TooFewTrials);
+    }
+    let mut curves: Vec<BTreeMap<chrono::NaiveDate, f64>> = Vec::with_capacity(run_ids.len());
+    for id in run_ids {
+        let mut curve = BTreeMap::new();
+        for (d, e) in store.backtest_equity(*id)? {
+            let v = e
+                .to_f64()
+                .ok_or_else(|| ValidateError::Invalid(format!("run {id} equity is not finite")))?;
+            curve.insert(d, v);
+        }
+        curves.push(curve);
+    }
+    let mut shared: BTreeSet<chrono::NaiveDate> = curves[0].keys().copied().collect();
+    for c in &curves[1..] {
+        shared.retain(|d| c.contains_key(d));
+    }
+    let columns: Vec<Vec<f64>> = curves
+        .iter()
+        .map(|c| {
+            let eq: Vec<f64> = shared.iter().map(|d| c[d]).collect();
+            returns_from_equity(&eq)
+        })
+        .collect();
+    let rows = columns[0].len();
+    let matrix: Vec<Vec<f64>> = (0..rows)
+        .map(|r| columns.iter().map(|c| c[r]).collect())
+        .collect();
+    Ok(pbo_cscv(&matrix, s)?)
 }
