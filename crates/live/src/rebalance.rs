@@ -8,6 +8,7 @@ use std::collections::BTreeSet;
 
 use chrono::NaiveDate;
 
+use pt_alpaca::account;
 use pt_alpaca::reference::WireClock;
 use pt_calendar::schedule::monthly_schedule;
 use pt_config::hash::config_hash;
@@ -19,6 +20,7 @@ use pt_data::view::StoreView;
 use pt_engine::decision::{
     decide, decision_to_json, params_from_config, record_to_json, DecisionInputs, DecisionRecord,
 };
+use pt_gate::gate::Capability;
 use pt_store::error::StoreError;
 use pt_store::trading::{Book, DecisionRow, Mode, OrderRow};
 use rust_decimal::Decimal;
@@ -40,17 +42,27 @@ pub enum RebalanceOutcome {
 }
 
 /// Decides the rebalance for the latest month-end signal date whose trade
-/// date has arrived, and records it as a `planned` paper decision with its
-/// inputs. Nothing is sent to the broker.
+/// date has arrived, and records it as a `planned` decision with its inputs.
+/// Below the first-order stage the decision is recorded in mode `DryRun`, its
+/// orders in state `DryRun` with `dry-` ids, and equity comes from the broker
+/// account. Nothing is sent to the broker.
 pub fn rebalance(ctx: &LiveContext, wire_clock: &WireClock) -> Result<RebalanceOutcome, LiveError> {
     let calendar = ctx.store.calendar()?;
     let trade_date = trade_session(wire_clock);
     let Some(due) = monthly_schedule(&calendar, ctx.cfg.data.start, trade_date).pop() else {
         return Ok(RebalanceOutcome::NotDue);
     };
-    if let Some(existing) =
-        ctx.store
-            .decision_for(ctx.strategy.id(), due.signal_date, Mode::Paper)?
+    // Below the first-order stage nothing may be sent: the decision and its
+    // orders are only recorded, in their own mode, and only where the stage
+    // allows recording a dry run.
+    let dry = ctx.gate.allows(Capability::SubmitOrder).is_err();
+    if dry {
+        ctx.gate.allows(Capability::RecordDryRun)?;
+    }
+    let mode = if dry { Mode::DryRun } else { Mode::Paper };
+    if let Some(existing) = ctx
+        .store
+        .decision_for(ctx.strategy.id(), due.signal_date, mode)?
     {
         // A run may have stopped between recording the decision and writing all
         // of its orders; write any that are missing from the stored decision.
@@ -58,20 +70,24 @@ pub fn rebalance(ctx: &LiveContext, wire_clock: &WireClock) -> Result<RebalanceO
             LiveError::Invalid(format!("decision {} has no trade date", existing.id))
         })?;
         let orders = stored_orders(&existing.outputs_json)?;
-        write_orders(ctx, existing.id, due.signal_date, trade_date, &orders)?;
+        write_orders(ctx, existing.id, due.signal_date, trade_date, &orders, dry)?;
         return Ok(RebalanceOutcome::NotDue);
     }
     let ref_date = calendar
         .prev_session(trade_date)
         .ok_or_else(|| LiveError::Invalid(format!("no session before trade date {trade_date}")))?;
 
-    let equity = ctx
-        .store
-        .equity_series(Book::Paper)?
-        .into_iter()
-        .find(|s| s.date == ref_date)
-        .ok_or_else(|| LiveError::Invalid(format!("no paper equity snapshot for {ref_date}")))?
-        .equity;
+    let equity = if dry {
+        // No paper ledger or snapshot exists yet; the broker account is the source.
+        account::account(ctx.http)?.equity
+    } else {
+        ctx.store
+            .equity_series(Book::Paper)?
+            .into_iter()
+            .find(|s| s.date == ref_date)
+            .ok_or_else(|| LiveError::Invalid(format!("no paper equity snapshot for {ref_date}")))?
+            .equity
+    };
     let positions = ctx.store.positions(Book::Paper)?;
 
     let mut universe = Vec::new();
@@ -138,7 +154,7 @@ pub fn rebalance(ctx: &LiveContext, wire_clock: &WireClock) -> Result<RebalanceO
         strategy_id: ctx.strategy.id().to_string(),
         signal_date: due.signal_date,
         trade_date: Some(trade_date),
-        mode: Mode::Paper,
+        mode,
         status: "planned".to_string(),
         inputs_json: record_to_json(&record),
         outputs_json: decision_to_json(&decision),
@@ -154,7 +170,7 @@ pub fn rebalance(ctx: &LiveContext, wire_clock: &WireClock) -> Result<RebalanceO
             reference_price: o.reference_price.value(),
         })
         .collect();
-    write_orders(ctx, decision_id, due.signal_date, trade_date, &orders)?;
+    write_orders(ctx, decision_id, due.signal_date, trade_date, &orders, dry)?;
     Ok(RebalanceOutcome::Recorded {
         decision_id,
         orders: decision.orders.len(),
@@ -169,27 +185,35 @@ struct PlannedOrder {
     reference_price: Decimal,
 }
 
-/// Writes each planned order as an Intent row of the decision. The store has
-/// no transaction spanning calls, so each order is its own atomic write; an
-/// order whose deterministic client order id is already stored counts as
-/// written, so a rerun after a partial write completes the set without
-/// duplicating any order.
+/// Writes each planned order as a row of the decision: `Intent` with the
+/// canonical client order id, or when `dry` is set `DryRun` with that id
+/// prefixed `dry-`, so a dry-run row never takes the id the paper order will
+/// send and adopt by. The store has no transaction spanning calls, so each
+/// order is its own atomic write; an order whose deterministic client order id
+/// is already stored counts as written, so a rerun after a partial write
+/// completes the set without duplicating any order.
 fn write_orders(
     ctx: &LiveContext,
     decision_id: i64,
     signal_date: NaiveDate,
     trade_date: NaiveDate,
     orders: &[PlannedOrder],
+    dry: bool,
 ) -> Result<(), LiveError> {
     for o in orders {
+        let id = client_order_id(ctx.strategy.id(), signal_date, o.symbol.as_str(), 1);
         let res = ctx.store.insert_order(&OrderRow {
-            client_order_id: client_order_id(ctx.strategy.id(), signal_date, o.symbol.as_str(), 1),
+            client_order_id: if dry { format!("dry-{id}") } else { id },
             decision_id: Some(decision_id),
             symbol: o.symbol.clone(),
             side: o.side,
             qty: o.qty,
             leg: 1,
-            state: OrderState::Intent,
+            state: if dry {
+                OrderState::DryRun
+            } else {
+                OrderState::Intent
+            },
             broker_order_id: None,
             filled_qty: 0,
             reference_price: o.reference_price,
