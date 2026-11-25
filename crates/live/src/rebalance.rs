@@ -41,6 +41,8 @@ pub enum RebalanceOutcome {
     DataNotReady,
     /// The trade date is past the allowed delay; the decision was stored as skipped.
     SkippedLate,
+    /// Too few minutes remain before the close; nothing was written (R-307).
+    Deferred,
 }
 
 /// Decides the rebalance for the latest month-end signal date whose trade
@@ -79,6 +81,11 @@ pub fn rebalance(ctx: &LiveContext, wire_clock: &WireClock) -> Result<RebalanceO
         let orders = stored_orders(&existing.outputs_json)?;
         write_orders(ctx, existing.id, due.signal_date, trade_date, &orders, dry)?;
         return Ok(RebalanceOutcome::NotDue);
+    }
+    // Too close to the close: write nothing, so a later call can decide (R-307).
+    let minutes_left = (wire_clock.next_close - wire_clock.timestamp).num_minutes();
+    if minutes_left < i64::from(ctx.cfg.risk.min_minutes_before_close) {
+        return Ok(RebalanceOutcome::Deferred);
     }
     // The normal trade date is the session after the signal date; each session
     // after it counts as one session late. Exactly at the limit is on time.
