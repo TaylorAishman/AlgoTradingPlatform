@@ -6,6 +6,7 @@ use chrono::NaiveDate;
 use pt_alpaca::reference::WireClock;
 use pt_calendar::calendar::TradingCalendar;
 use pt_core::types::Adjustment;
+use pt_ops::alert::Level;
 use pt_store::trading::{Book, EquitySnapshot};
 use rust_decimal::Decimal;
 
@@ -26,8 +27,10 @@ pub fn expected_last_session(clock: &WireClock, calendar: &TradingCalendar) -> O
 
 /// Stores a snapshot for every session after the last one stored, up to and
 /// including `through`, valuing positions at the stored raw close. With no
-/// snapshot yet it starts at the date of the first ledger entry. Returns how
-/// many snapshots it stored.
+/// snapshot yet it starts at the date of the first ledger entry. It stops at
+/// the first session lacking a raw close for a held symbol, so no later session
+/// is stored either. More than one new snapshot records a `missed_run` warning.
+/// Returns how many snapshots it stored.
 pub fn snapshot_equity(ctx: &LiveContext<'_>, through: NaiveDate) -> Result<usize, LiveError> {
     let start = match ctx.store.equity_series(Book::Paper)?.last() {
         Some(last) => match last.date.succ_opt() {
@@ -44,6 +47,7 @@ pub fn snapshot_equity(ctx: &LiveContext<'_>, through: NaiveDate) -> Result<usiz
     for &date in calendar.sessions_between(start, through) {
         let cash = ctx.store.cash_at(Book::Paper, date)?;
         let mut positions_value = Decimal::ZERO;
+        let mut missing = false;
         for (symbol, qty) in ctx.store.positions_at(Book::Paper, date)? {
             let bars = ctx.store.bars_asof(
                 &symbol,
@@ -53,10 +57,14 @@ pub fn snapshot_equity(ctx: &LiveContext<'_>, through: NaiveDate) -> Result<usiz
                 date,
                 None,
             )?;
-            let bar = bars.first().ok_or_else(|| {
-                LiveError::Invalid(format!("no raw close for {symbol} on {date}"))
-            })?;
+            let Some(bar) = bars.first() else {
+                missing = true;
+                break;
+            };
             positions_value += bar.close.value() * Decimal::from(qty);
+        }
+        if missing {
+            break;
         }
         ctx.store.put_equity_snapshot(&EquitySnapshot {
             book: Book::Paper,
@@ -67,6 +75,16 @@ pub fn snapshot_equity(ctx: &LiveContext<'_>, through: NaiveDate) -> Result<usiz
             recorded_at: ctx.clock.now_utc(),
         })?;
         stored += 1;
+    }
+    if stored > 1 {
+        ctx.alerter.alert(
+            ctx.store,
+            Level::Warn,
+            "missed_run",
+            &format!("{stored} sessions were snapshotted at once; runs were missed"),
+            None,
+            ctx.clock.now_utc(),
+        );
     }
     Ok(stored)
 }
