@@ -14,7 +14,7 @@ use pt_store::shadow::ShadowDay;
 use pt_store::trading::{Book, EquitySnapshot};
 use rust_decimal::prelude::ToPrimitive;
 use rust_decimal::Decimal;
-use std::collections::BTreeMap;
+use std::collections::{BTreeMap, BTreeSet};
 
 /// Orders that reached the broker and so take part in the shadow day.
 const SENT: [OrderState; 5] = [
@@ -87,6 +87,33 @@ pub fn shadow_day(store: &Store, cfg: &Config, date: NaiveDate) -> Result<Shadow
         shadow_return: to_f64(shadow_return),
         diff: to_f64(paper_return - shadow_return),
     })
+}
+
+/// Store a shadow day for every paper snapshot date not yet compared.
+///
+/// Dates that cannot be compared (no previous session or a missing snapshot)
+/// are skipped. Returns how many rows were stored.
+pub fn update(store: &Store, cfg: &Config) -> Result<usize, ShadowError> {
+    let done: BTreeSet<NaiveDate> = store.shadow_days()?.into_iter().map(|r| r.date).collect();
+    let mut dates: Vec<NaiveDate> = store
+        .equity_series(Book::Paper)?
+        .into_iter()
+        .map(|s| s.date)
+        .filter(|d| !done.contains(d))
+        .collect();
+    dates.sort();
+    let mut stored = 0;
+    for date in dates {
+        match shadow_day(store, cfg, date) {
+            Ok(day) => {
+                store.put_shadow_day(&day)?;
+                stored += 1;
+            }
+            Err(ShadowError::NotFound(_)) => {}
+            Err(e) => return Err(e),
+        }
+    }
+    Ok(stored)
 }
 
 fn snapshot_equity(snapshots: &[EquitySnapshot], date: NaiveDate) -> Result<Decimal, ShadowError> {
