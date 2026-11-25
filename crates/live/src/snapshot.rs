@@ -7,6 +7,8 @@ use pt_alpaca::reference::WireClock;
 use pt_calendar::calendar::TradingCalendar;
 use pt_core::types::Adjustment;
 use pt_ops::alert::Level;
+use pt_risk::halts::{check_equity, HaltReason};
+use pt_risk::pretrade::RiskLimits;
 use pt_store::trading::{Book, EquitySnapshot};
 use rust_decimal::Decimal;
 
@@ -87,4 +89,40 @@ pub fn snapshot_equity(ctx: &LiveContext<'_>, through: NaiveDate) -> Result<usiz
         );
     }
     Ok(stored)
+}
+
+/// Checks the stored paper equity series against the configured halt limits
+/// with `check_equity`. A breach sets one halt and a critical `halt_set` alert;
+/// while a halt for the same reason is still active nothing more is added.
+/// Returns the breach found, if any.
+pub fn check_halts(ctx: &LiveContext<'_>) -> Result<Option<HaltReason>, LiveError> {
+    let equity: Vec<Decimal> = ctx
+        .store
+        .equity_series(Book::Paper)?
+        .iter()
+        .map(|s| s.equity)
+        .collect();
+    let limits = RiskLimits {
+        max_order_notional: ctx.cfg.risk.max_order_notional,
+        max_weight: ctx.cfg.sizing.max_weight,
+        max_gross: ctx.cfg.sizing.max_gross,
+        daily_loss_limit: ctx.cfg.risk.daily_loss_limit,
+        max_drawdown: ctx.cfg.risk.max_drawdown,
+    };
+    let Some(reason) = check_equity(&equity, &limits) else {
+        return Ok(None);
+    };
+    let name = match reason {
+        HaltReason::DailyLoss => "daily_loss",
+        HaltReason::Drawdown => "drawdown",
+    };
+    if ctx.store.active_halts()?.iter().any(|h| h.reason == name) {
+        return Ok(Some(reason));
+    }
+    let now = ctx.clock.now_utc();
+    let detail = format!("equity series breached the {name} limit");
+    ctx.store.set_halt(name, &detail, now)?;
+    ctx.alerter
+        .alert(ctx.store, Level::Critical, "halt_set", &detail, None, now);
+    Ok(Some(reason))
 }
