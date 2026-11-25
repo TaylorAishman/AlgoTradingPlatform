@@ -1,11 +1,41 @@
 //! The shared decision function and its parameters.
 
+use crate::error::EngineError;
+use chrono::NaiveDate;
 use pt_config::config::Config;
-use pt_portfolio::weights::SizingParams;
-use pt_risk::pretrade::RiskLimits;
+use pt_core::money::{Money, Price};
+use pt_core::signal::{RiskEstimates, SignalSet};
+use pt_core::types::{OrderIntent, Positions, Symbol, Weights};
+use pt_portfolio::orders::{plan_orders, target_shares};
+use pt_portfolio::weights::{target_weights, SizingParams};
+use pt_risk::pretrade::{Rejection, RiskLimits};
 use pt_strategy::estimate::VolParams;
 use rust_decimal::prelude::ToPrimitive;
 use rust_decimal::Decimal;
+use std::collections::{BTreeMap, BTreeSet};
+
+/// What a decision is made from: the dates, the account and the universe.
+#[derive(Debug, Clone, PartialEq)]
+pub struct DecisionInputs {
+    pub signal_date: NaiveDate,
+    pub trade_date: NaiveDate,
+    pub ref_date: NaiveDate,
+    pub equity: Money,
+    pub positions: Positions,
+    pub universe: Vec<Symbol>,
+    pub shortable: BTreeSet<Symbol>,
+}
+
+/// A decision: what it was given and the weights, targets and orders it produced.
+#[derive(Debug, Clone, PartialEq)]
+pub struct Decision {
+    pub signals: SignalSet,
+    pub risk: RiskEstimates,
+    pub weights: Weights,
+    pub target: Positions,
+    pub orders: Vec<OrderIntent>,
+    pub rejected: Vec<(OrderIntent, Rejection)>,
+}
 
 /// Everything the decision function reads from configuration.
 #[derive(Debug, Clone, PartialEq)]
@@ -41,4 +71,26 @@ pub fn params_from_config(cfg: &Config) -> DecisionParams {
             max_drawdown: cfg.risk.max_drawdown,
         },
     }
+}
+
+/// Turns signals and risk estimates into weights (Arch 5.10.3), whole-share
+/// targets and orders (Arch 5.10.4) at the given reference prices.
+pub fn decide_with(
+    signals: SignalSet,
+    risk: RiskEstimates,
+    inputs: &DecisionInputs,
+    ref_prices: &BTreeMap<Symbol, Price>,
+    p: &DecisionParams,
+) -> Result<Decision, EngineError> {
+    let weights = target_weights(&signals.signals, &risk, &inputs.shortable, &p.sizing);
+    let target = target_shares(&weights, inputs.equity, ref_prices)?;
+    let orders = plan_orders(&inputs.positions, &target, ref_prices)?;
+    Ok(Decision {
+        signals,
+        risk,
+        weights,
+        target,
+        orders,
+        rejected: Vec::new(),
+    })
 }
