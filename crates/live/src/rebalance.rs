@@ -120,12 +120,14 @@ pub fn rebalance(ctx: &LiveContext, wire_clock: &WireClock) -> Result<RebalanceO
 
     let mut universe = Vec::new();
     let mut shortable = BTreeSet::new();
+    let mut untradable = Vec::new();
     for inst in &ctx.cfg.universe {
         let symbol = symbol(&inst.symbol)?;
         let Some(asset) = ctx.store.asset_asof(&symbol, None)? else {
             continue;
         };
         if !asset.tradable {
+            untradable.push(symbol);
             continue;
         }
         if inst.shortable && asset.shortable && asset.easy_to_borrow {
@@ -214,6 +216,17 @@ pub fn rebalance(ctx: &LiveContext, wire_clock: &WireClock) -> Result<RebalanceO
         outputs_json: decision_to_json(&decision),
         created_at: now,
     })?;
+    // After the decision is stored, so a rerun (which returns above) or a
+    // data-not-ready retry never repeats an alert for the same decision.
+    for symbol in &untradable {
+        ctx.store.record_alert(
+            "warn",
+            "not_tradable",
+            &format!("{symbol} is not tradable; left out of the universe"),
+            false,
+            now,
+        )?;
+    }
     let orders: Vec<PlannedOrder> = decision
         .orders
         .iter()
