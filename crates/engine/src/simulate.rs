@@ -100,8 +100,11 @@ pub fn simulate(
             .filter(|(_, q)| **q < 0)
             .map(|(s, q)| closes[s].notional(-*q).0)
             .sum();
-        // One day per session for now; calendar days to the next session come later.
-        let borrow = borrow_cost(&cfg.cost, Money(short_value), 1).0;
+        // Borrow accrues over the calendar days until the next session; 1 on the last one.
+        let days = cal
+            .next_session(date)
+            .map_or(1, |next| (next - date).num_days());
+        let borrow = borrow_cost(&cfg.cost, Money(short_value), days).0;
         book.cash -= borrow;
         result.borrow_total += borrow;
         let equity = book.equity(&closes)?;
