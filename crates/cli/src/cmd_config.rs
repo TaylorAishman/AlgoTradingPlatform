@@ -1,9 +1,16 @@
 //! `config`, `gates`, `calendar` and `universe` commands (stubs).
 
 use crate::cli::{CalendarCmd, ConfigCmd, UniverseCmd};
+use crate::wiring;
 
-pub fn config(_action: &ConfigCmd) -> anyhow::Result<i32> {
-    anyhow::bail!("`config` is not implemented yet")
+pub fn config(action: &ConfigCmd) -> anyhow::Result<i32> {
+    match action {
+        ConfigCmd::Check => {
+            let cfg = wiring::load_config()?;
+            println!("{}", pt_config::hash::config_hash(&cfg));
+            Ok(0)
+        }
+    }
 }
 
 pub fn gates() -> anyhow::Result<i32> {
