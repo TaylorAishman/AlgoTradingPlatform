@@ -126,6 +126,50 @@ fn to_f64(d: Decimal) -> Result<f64, ValidateError> {
         .ok_or_else(|| ValidateError::Invalid(format!("{d} does not fit in f64")))
 }
 
+/// The daily excess returns of dated `equity` over the risk-free closes. Each equity date
+/// is looked up in `rf_closes` by date; a date with no close is an error. The two series
+/// are never paired by position.
+pub(crate) fn excess_returns(
+    equity: &[(NaiveDate, Decimal)],
+    rf_symbol: &str,
+    rf_closes: &BTreeMap<NaiveDate, f64>,
+) -> Result<Vec<f64>, ValidateError> {
+    let eq = equity
+        .iter()
+        .map(|(_, e)| to_f64(*e))
+        .collect::<Result<Vec<_>, _>>()?;
+    let rf = equity
+        .iter()
+        .map(|(d, _)| {
+            rf_closes
+                .get(d)
+                .copied()
+                .ok_or_else(|| ValidateError::Invalid(format!("no {rf_symbol} close on {d}")))
+        })
+        .collect::<Result<Vec<_>, _>>()?;
+    Ok(returns_from_equity(&eq)
+        .iter()
+        .zip(returns_from_equity(&rf))
+        .map(|(r, b)| r - b)
+        .collect())
+}
+
+/// The adjusted closes of the config's risk-free symbol by date, from `from` to `to`
+/// inclusive, on the config's feed with no as-of cut.
+pub(crate) fn risk_free_closes(
+    store: &Store,
+    cfg: &Config,
+    from: NaiveDate,
+    to: NaiveDate,
+) -> Result<BTreeMap<NaiveDate, f64>, ValidateError> {
+    let rf_sym = symbol(&cfg.strategy.risk_free_symbol)?;
+    store
+        .bars_asof(&rf_sym, Adjustment::All, &cfg.data.feed, from, to, None)?
+        .iter()
+        .map(|b| Ok((b.date, to_f64(b.close.value())?)))
+        .collect()
+}
+
 impl Metrics {
     /// The metrics of `result`. `rf_closes` are the closes of the risk-free instrument
     /// `rf_symbol` by date; they are aligned to the equity dates, and a missing close is an
@@ -141,21 +185,7 @@ impl Metrics {
             .map(|(_, e)| to_f64(*e))
             .collect::<Result<Vec<_>, _>>()?;
         let rets = returns_from_equity(&equity);
-        let rf = result
-            .equity
-            .iter()
-            .map(|(d, _)| {
-                rf_closes
-                    .get(d)
-                    .copied()
-                    .ok_or_else(|| ValidateError::Invalid(format!("no {rf_symbol} close on {d}")))
-            })
-            .collect::<Result<Vec<_>, _>>()?;
-        let excess: Vec<f64> = rets
-            .iter()
-            .zip(returns_from_equity(&rf))
-            .map(|(r, b)| r - b)
-            .collect();
+        let excess = excess_returns(&result.equity, rf_symbol, rf_closes)?;
         let turnover = if equity.is_empty() || rets.is_empty() {
             0.0
         } else {
@@ -255,18 +285,7 @@ pub fn run_and_record(
         &params,
     )?;
 
-    let rf_closes = store
-        .bars_asof(
-            &rf_sym,
-            Adjustment::All,
-            &cfg.data.feed,
-            req.from,
-            req.to,
-            None,
-        )?
-        .iter()
-        .map(|b| Ok((b.date, to_f64(b.close.value())?)))
-        .collect::<Result<BTreeMap<_, _>, ValidateError>>()?;
+    let rf_closes = risk_free_closes(store, cfg, req.from, req.to)?;
     let (metrics, excess) = Metrics::from_result(&result, rf_sym.as_str(), &rf_closes)?;
 
     let n_obs = u32::try_from(excess.len())
