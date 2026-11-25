@@ -34,8 +34,16 @@ pub fn submit_planned(ctx: &LiveContext, auth: &AuthContext) -> Result<SubmitRep
     for row in ctx.store.orders_in_states(&[OrderState::Intent])? {
         let order = new_order(&row);
         let permit = ctx.gate.authorize(&summary(&order), auth)?;
-        if order_by_client_id(ctx.http, &order.client_order_id)?.is_some() {
-            // The broker already holds it: never send it twice (D-20).
+        if let Some(held) = order_by_client_id(ctx.http, &order.client_order_id)? {
+            // The broker already holds it: adopt it, never send it twice (D-20).
+            ctx.store.set_order_state(
+                &row.client_order_id,
+                OrderState::Submitted,
+                0,
+                Some(&held.id),
+                ctx.clock.now_utc(),
+            )?;
+            report.adopted += 1;
             continue;
         }
         let wire = submit_order(ctx.http, permit, &order)?;
