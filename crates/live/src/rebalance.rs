@@ -89,9 +89,11 @@ pub fn rebalance(ctx: &LiveContext, wire_clock: &WireClock) -> Result<RebalanceO
         .sessions_between(normal, trade_date)
         .len()
         .saturating_sub(1);
+    // The first rebalance of a mode is allowed however late it is (R-306).
+    let bootstrap = ctx.store.decisions(mode)?.is_empty();
     // A late rebalance is still decided below, so its skipped row carries a
     // full record and outputs that replay like any other decision.
-    let skip_late = late > ctx.cfg.risk.max_rebalance_delay_sessions as usize;
+    let skip_late = !bootstrap && late > ctx.cfg.risk.max_rebalance_delay_sessions as usize;
     let ref_date = calendar
         .prev_session(trade_date)
         .ok_or_else(|| LiveError::Invalid(format!("no session before trade date {trade_date}")))?;
@@ -166,7 +168,7 @@ pub fn rebalance(ctx: &LiveContext, wire_clock: &WireClock) -> Result<RebalanceO
         feed,
         config_hash: config_hash(ctx.cfg),
         code_version: ctx.code_version.to_string(),
-        bootstrap: false,
+        bootstrap,
     };
     if skip_late {
         // The alert is written before the row: if it fails, no row exists and
