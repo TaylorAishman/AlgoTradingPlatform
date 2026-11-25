@@ -4,7 +4,7 @@ use crate::error::ShadowError;
 use crate::replay::replay_decision;
 use pt_config::config::Config;
 use pt_store::db::Store;
-use pt_store::trading::Mode;
+use pt_store::trading::{Book, Mode};
 use pt_strategy::strategy::Strategy;
 
 /// Counts and means summarising paper trading against its shadow simulation.
@@ -20,6 +20,9 @@ pub struct Fidelity {
     pub replay_mismatches: usize,
     /// Reconciliation and foreign-order halts, cleared or not.
     pub reconciliation_breaks: usize,
+    /// Sessions whose paper snapshot was recorded after the UTC date of the
+    /// next session. The last session is never counted.
+    pub missed_sessions: usize,
     /// Mean slippage over recorded orders, in basis points.
     pub mean_slippage_bps: f64,
     /// Mean of paper return minus shadow return, in basis points.
@@ -61,12 +64,24 @@ pub fn fidelity(
         .filter(|h| h.reason.starts_with("reconciliation") || h.reason == "foreign_order")
         .count();
 
+    let calendar = store.calendar()?;
+    let missed_sessions = store
+        .equity_series(Book::Paper)?
+        .iter()
+        .filter(|s| {
+            calendar
+                .next_session(s.date)
+                .is_some_and(|next| s.recorded_at.date_naive() > next)
+        })
+        .count();
+
     Ok(Fidelity {
         n_sessions: days.len(),
         n_rebalances: decisions.len(),
         n_fills: store.fills()?.len(),
         replay_mismatches,
         reconciliation_breaks,
+        missed_sessions,
         mean_slippage_bps: mean(&slippage),
         mean_diff_bps: mean(&diffs),
         max_abs_diff_bps: diffs.iter().fold(0.0, |m, d| f64::max(m, d.abs())),
