@@ -536,4 +536,25 @@ impl Store {
             .iter()
             .fold(Decimal::ZERO, |acc, e| acc + e.cash_delta))
     }
+
+    /// Net quantity per symbol using entries dated on or before `as_of`.
+    pub fn positions_at(&self, book: Book, as_of: NaiveDate) -> Result<Positions, StoreError> {
+        let mut out = Positions::new();
+        for e in self.ledger(book)?.into_iter().filter(|e| e.date <= as_of) {
+            if let Some(s) = e.symbol {
+                *out.entry(s).or_insert(0) += e.qty;
+            }
+        }
+        out.retain(|_, q| *q != 0);
+        Ok(out)
+    }
+
+    /// Cash using entries dated on or before `as_of`; zero when there are none.
+    pub fn cash_at(&self, book: Book, as_of: NaiveDate) -> Result<Decimal, StoreError> {
+        Ok(self
+            .ledger(book)?
+            .iter()
+            .filter(|e| e.date <= as_of)
+            .fold(Decimal::ZERO, |acc, e| acc + e.cash_delta))
+    }
 }
