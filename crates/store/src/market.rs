@@ -1,7 +1,8 @@
 //! Market data repositories: versioned daily bars.
 
-use chrono::{DateTime, SecondsFormat, Utc};
-use pt_core::types::{Adjustment, Bar};
+use chrono::{DateTime, NaiveDate, SecondsFormat, Utc};
+use pt_core::money::Price;
+use pt_core::types::{Adjustment, Bar, Symbol};
 use rusqlite::{params, OptionalExtension};
 use rust_decimal::Decimal;
 
@@ -134,5 +135,72 @@ impl Store {
         }
         tx.commit()?;
         Ok(stats)
+    }
+
+    /// Reads bars for `from..=to`, one per date, ordered by date.
+    ///
+    /// Each date yields its latest version fetched at or before `asof`, or
+    /// its latest version overall when `asof` is `None`.
+    pub fn bars_asof(
+        &self,
+        symbol: &Symbol,
+        adjustment: Adjustment,
+        feed: &str,
+        from: NaiveDate,
+        to: NaiveDate,
+        asof: Option<DateTime<Utc>>,
+    ) -> Result<Vec<Bar>, StoreError> {
+        let asof = asof.map(instant_text);
+        let mut stmt = self.conn.prepare(
+            "SELECT b.date, b.open, b.high, b.low, b.close, b.volume FROM bars b
+             WHERE b.symbol = ?1 AND b.adjustment = ?2 AND b.feed = ?3
+               AND b.date >= ?4 AND b.date <= ?5
+               AND (?6 IS NULL OR b.fetched_at <= ?6)
+               AND b.fetched_at = (
+                   SELECT MAX(x.fetched_at) FROM bars x
+                   WHERE x.symbol = b.symbol AND x.date = b.date
+                     AND x.adjustment = b.adjustment AND x.feed = b.feed
+                     AND (?6 IS NULL OR x.fetched_at <= ?6))
+             ORDER BY b.date",
+        )?;
+        let rows = stmt.query_map(
+            params![
+                symbol.as_str(),
+                adjustment_text(adjustment),
+                feed,
+                from.format("%Y-%m-%d").to_string(),
+                to.format("%Y-%m-%d").to_string(),
+                asof,
+            ],
+            |r| {
+                Ok((
+                    r.get::<_, String>(0)?,
+                    r.get::<_, String>(1)?,
+                    r.get::<_, String>(2)?,
+                    r.get::<_, String>(3)?,
+                    r.get::<_, String>(4)?,
+                    r.get::<_, i64>(5)?,
+                ))
+            },
+        )?;
+        let mut out = Vec::new();
+        for row in rows {
+            let (date, o, h, l, c, v) = row?;
+            let price = |t: &str| -> Result<Price, StoreError> {
+                Price::new(text_to_dec(t)?).map_err(|e| StoreError::Codec(e.to_string()))
+            };
+            out.push(Bar {
+                symbol: symbol.clone(),
+                date: NaiveDate::parse_from_str(&date, "%Y-%m-%d")
+                    .map_err(|e| StoreError::Codec(format!("bad date {date}: {e}")))?,
+                open: price(&o)?,
+                high: price(&h)?,
+                low: price(&l)?,
+                close: price(&c)?,
+                volume: u64::try_from(v)
+                    .map_err(|_| StoreError::Codec(format!("negative volume {v}")))?,
+            });
+        }
+        Ok(out)
     }
 }
