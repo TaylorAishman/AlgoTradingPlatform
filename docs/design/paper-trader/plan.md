@@ -417,6 +417,7 @@ How to read the tables:
 | R13 | cli-backtest | Add backtest run, printing metrics, the Deflated Sharpe Ratio and the trial count | R-388 | sonnet | crates/cli/src/cmd_backtest.rs, crates/cli/tests/backtest_run.rs | cargo test -p pt-cli --test backtest_run |
 | R14 | cli-backtest | Exit 1 and name the missing bar when a backtest fails | R-389 | sonnet | crates/cli/src/cmd_backtest.rs, crates/cli/tests/backtest_failure.rs | cargo test -p pt-cli --test backtest_failure |
 | R15 | cli-backtest | Add backtest crosscheck | R-390 | sonnet | crates/cli/src/cmd_backtest.rs, crates/cli/tests/crosscheck.rs | cargo test -p pt-cli --test crosscheck |
+| D27 | cli-validate | Add backtest_family | R-391 | sonnet | crates/store/src/ops.rs, crates/store/tests/backtest_family.rs | cargo test -p pt-store --test backtest_family |
 | R16 | cli-validate | Add validate dsr | R-391 | sonnet | crates/cli/src/cmd_validate.rs, crates/cli/tests/validate_dsr.rs | cargo test -p pt-cli --test validate_dsr |
 | R17 | cli-validate | Add validate pbo | R-391 | sonnet | crates/cli/src/cmd_validate.rs, crates/cli/tests/validate_pbo.rs | cargo test -p pt-cli --test validate_pbo |
 | R18 | cli-validate | Add validate benchmark | R-392 | sonnet | crates/cli/src/cmd_validate.rs, crates/cli/tests/validate_benchmark.rs | cargo test -p pt-cli --test validate_benchmark |
@@ -444,14 +445,14 @@ Wave | Chains that can run together
 7 | validate-backtest (5), live-submit (5), live-reconcile (5), live-snapshots (3), shadow-daily (3), cli-data (3)
 8 | validate-crosscheck (3), validate-overfit (3), live-settle (4), live-rebalance (4), shadow-fidelity (3)
 9 | live-legs (3), live-rebalance-timing (4), live-killswitch (2), shadow-signoff (3), cli-backtest (3)
-10 | live-cycle (5), cli-validate (3)
+10 | live-cycle (5), cli-validate (4)
 11 | live-cycle-failures (3)
 12 | live-first-order (3)
 13 | cli-live (3)
 14 | cli-ops (4)
 15 | cli-e2e (2)
 
-88 chains, 321 steps. Widest wave: 17 chains. Longest chain: 10 steps.
+88 chains, 322 steps. Widest wave: 17 chains. Longest chain: 10 steps.
 
 What the waves mean in practice:
 
@@ -550,7 +551,7 @@ One line per chain: what to look for when reviewing it.
 - `cli-import`: These commands must work in the backtest stage.
 - `cli-data`: Exit code 1 when any universe symbol or doctor check fails.
 - `cli-backtest`: The trial count is printed with every backtest so nobody can forget how many were tried.
-- `cli-validate`: With one trial, PBO must say it is undefined instead of printing a number.
+- `cli-validate`: D27 is one read of one column in `pt-store`: check that it adds a method and changes none (see Replans). `validate dsr` must take the family from the stored run, never from a constant or a flag. With one trial, PBO must say it is undefined instead of printing a number.
 - `cli-live`: Check the exit codes 0, 1, 2 and 3 and that the report is written on every path except a held lock.
 - `cli-ops`: Destructive commands need `--yes`; `halt status` exits 2 while a halt is active.
 - `cli-e2e`: These two tests are the acceptance of the whole design. Any source change in this chain is a bug fix elsewhere: read it as one.
@@ -904,3 +905,69 @@ Other chains:
 
 - `cli-validate` (R16, R18) calls these two functions with the config the command line has already loaded. Its rows, R-391 and R-392 are unchanged: every command reads `--config`, and a step builds to the signatures of architecture 5.8 as they stand when it starts.
 - `validate-crosscheck` shares the wave and does not list `runner.rs`. `validate-backtest`, which owns `runner.rs`, is under After for this chain, so the two never run at once.
+
+### cli-validate, replan 1: R16 was stuck
+
+R16 ("Add validate dsr") could not be built inside its Files. `trader validate dsr --run <id>` takes a run id and nothing else (the command table of architecture 5.8). It must call `dsr_for_run(store, cfg, run_id, family)`, and the family decides which trials are counted. `Store::save_backtest` writes the family to `backtest_runs.family`. Nothing reads it back: architecture 5.4 gives the store no such method, `Store.conn` is `pub(crate)` (D26), and `pt-cli` has no `rusqlite` dependency. So `cmd_validate.rs` had no way to learn the family of a stored run.
+
+A constant does not work. `backtest run --strategy benchmark` stores its run under `bh-volscaled-v1`. With `tsmom-v1` hard-coded, `validate dsr` on that run would count the momentum trials and deflate by their variance. The answer would be wrong and nothing would say so.
+
+What changed:
+
+- One new step, D27, on `cli-validate`, before R16. The chain is now D27, R16, R17, R18.
+- R16, R17 and R18 are unchanged: ID, Step, Reqs, Files and Proof. Requirements and architecture are unchanged.
+- No chain, After or wave changed. The chain has four steps instead of three.
+
+D27:
+
+- In `crates/store/src/ops.rs`, add `pub fn backtest_family(&self, id: i64) -> Result<String, StoreError>` to the `impl Store` block that holds `save_backtest` and `backtest_equity`.
+- It returns the `family` column of the `backtest_runs` row with that id.
+- An unknown id returns `StoreError::NotFound(format!("backtest {id}"))`, the same value and text `backtest_equity` returns. Decide that in `ops.rs` before the `?`: `From<rusqlite::Error>` maps every error to `StoreError::Sql`, and a `query_row` that finds nothing is an error. `rusqlite::OptionalExtension` (already used in `market.rs`) turns it into `None`.
+- Add nothing else. No migration, no new type, no change to `save_backtest`, `backtest_equity` or any other method. `lib.rs`, `error.rs` and `Cargo.toml` are not touched.
+- The ID is D27 because the file is in component D (`pt-store`). D26 was the last D step.
+
+Tests for D27 (`crates/store/tests/backtest_family.rs`):
+
+- R-391 is in Reqs because D27 enables it. Its acceptance check belongs to R16 and R17 and is not what the tester writes here. No requirement row describes this reader, so the cases are these three, in the style of `tests/backtests.rs`, on `Store::open_in_memory()`:
+- Save one backtest under `tsmom-v1` and one under `bh-volscaled-v1`. `backtest_family` of the first id is `tsmom-v1` and of the second is `bh-volscaled-v1`.
+- Save a backtest with an empty equity slice under `f`. `backtest_family` of its id is `f`. The run row alone is enough; the method must not go through `backtest_equity`.
+- `backtest_family(999)` on a new store matches `Err(StoreError::NotFound(_))`.
+
+R16, with D27 in place:
+
+- `cmd_validate.rs` loads the config and opens the store as `cmd_backtest.rs` does, calls `store.backtest_family(run)`, and passes the result to `dsr_for_run`. It prints `dsr`, `sr0`, `trials`, skewness and kurtosis and returns 0.
+- An unknown run id fails at `backtest_family` with `not found: backtest 99`. The dispatcher prints that to stderr and exits 1, which is what the second locked case asserts.
+- Do not copy the private `family(strategy)` function of `cmd_backtest.rs`. That one maps a `--strategy` name to a family before the run exists. `validate dsr` has no strategy name, only a run.
+- The stored family is the registry family. `run_and_record` passes `strategy.id()` to both `save_backtest` and `register_trial`, so `trials(backtest_family(id))` is the set of trials the run belongs to.
+
+The locked test of R16:
+
+- `crates/cli/tests/validate_dsr.rs` is already written and is untracked in the chain worktree (blob `322fc5d3bf3f`). It stays exactly as it is and is committed with R16.
+- It cannot pass before R16, and `CHECK` runs `cargo test --workspace`. While D27 is built it must be out of the worktree, or `CHECK` at D27 fails on it. `git reset --hard` does not remove an untracked file. Whoever runs the chain moves it aside before D27 and puts it back, with the same blob hash, before R16. It must not be staged into the D27 commit.
+
+Checked with a trial build of a copy of `chain/paper-trader/cli-validate` at `0379150` (R13 to R15), outside the repository:
+
+- With the method and the three store cases alone: `cargo fmt --check` passes, `cargo clippy --workspace --all-targets --locked -- -D warnings` is clean, and `cargo test -p pt-store` (139 tests, the locked `backtests.rs` of R-072 among them) and `cargo test -p pt-archtest` pass. The method is public on a public type, so it is not dead code before R16 calls it.
+- With a throwaway `cmd_validate.rs` on top (the `Dsr` arm only, 32 lines), both cases of the locked `validate_dsr.rs` pass, and clippy is clean for `pt-store` and `pt-cli`. No other file was touched.
+- Size of D27: about 12 lines and one import in `ops.rs`, about 45 lines of test.
+
+R17 and R18 were checked and are not affected:
+
+- `pbo_for_runs(store, run_ids, s)` takes no family. `s` is `cfg.stats.pbo_partitions`. With fewer than two runs it returns `ValidateError::TooFewTrials`, whose text is `too few trials`. R-391 asks for `PBO is undefined for fewer than 2 trials`, so R17 matches on that variant and prints the sentence itself. `PboResult.n_combinations` is the number of combinations.
+- `compare_to_benchmark(store, cfg, run_id, benchmark_run_id, periods_per_year)` takes no family. `periods_per_year` is `cfg.stats.periods_per_year`.
+
+Who writes `ops.rs`:
+
+- `store-ops` (D20 to D24, landed), then `cli-validate` (D27). `store-ops` is an ancestor of `cli-validate` through `cli-backtest`, `validate-overfit` and `validate-backtest`.
+- No other chain that has not landed lists a file under `crates/store/`: `live-legs`, `live-rebalance`, `live-rebalance-timing`, `live-killswitch`, `live-cycle`, `live-cycle-failures`, `live-first-order` and `shadow-signoff` write `crates/live/` or `crates/shadow/` only, and `cli-backtest`, `cli-live`, `cli-ops` and `cli-e2e` write `crates/cli/` only. None of their branches that exist today has changed a file under `crates/store/` either.
+- D27 adds a method and changes none, so every chain that calls `pt-store` builds the same before and after it.
+
+Rejected:
+
+- A constant family, or trying each known family in turn. The first is wrong for benchmark runs. The second breaks as soon as a third strategy exists.
+- A `--strategy` flag on `validate dsr`. It changes the command table of architecture 5.8 and the locked test, and it lets the owner name a family the run does not belong to.
+- A three-argument `dsr_for_run` in `pt-validate` that looks the family up itself. It needs the same store method, changes a signature of architecture 5.8 that `cmd_backtest.rs` (R13) already calls, and touches a landed chain's module for no gain.
+- A chain of its own for D27, with `cli-validate` after it. Only this chain needs the method, R16 to R18 share one file so nothing could run beside it, and the chain would cost one more landing.
+- Adding `ops.rs` to the Files of R16. The step would then cross two crates, and its Files would change.
+
+Architecture 5.4 lists the methods of `Store` and has no reader for the family of a stored run. That is a gap, not a contradiction: `dsr_for_run` in 5.8 needs a family, the command table in 5.8 gives the command only a run id, and one more read method satisfies both. So the architecture is not the cause of this replan and is not changed by it. The next revision should add one line to the `ops.rs` block of 5.4: `pub fn backtest_family(&self, run_id: i64) -> Result<String, StoreError>;`. The note on V09 above says the same of the stored config hash; the two readers could be added together.
