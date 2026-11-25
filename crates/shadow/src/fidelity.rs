@@ -3,6 +3,7 @@
 use crate::error::ShadowError;
 use crate::replay::replay_decision;
 use pt_config::config::Config;
+use pt_engine::decision::record_from_json;
 use pt_store::db::Store;
 use pt_store::trading::{Book, Mode};
 use pt_strategy::strategy::Strategy;
@@ -23,6 +24,9 @@ pub struct Fidelity {
     /// Sessions whose paper snapshot was recorded after the UTC date of the
     /// next session. The last session is never counted.
     pub missed_sessions: usize,
+    /// Paper decisions skipped as late, plus planned non-bootstrap decisions
+    /// traded later than the session after their signal date.
+    pub late_rebalances: usize,
     /// Mean slippage over recorded orders, in basis points.
     pub mean_slippage_bps: f64,
     /// Mean of paper return minus shadow return, in basis points.
@@ -40,7 +44,7 @@ fn mean(values: &[f64]) -> f64 {
 }
 
 /// Summarises the stored paper, shadow and slippage records. Each paper
-/// decision is replayed with `replay_decision`.
+/// decision is replayed with `replay_decision`, skipped_late ones included.
 pub fn fidelity(
     store: &Store,
     cfg: &Config,
@@ -58,13 +62,28 @@ pub fn fidelity(
         }
     }
 
+    let calendar = store.calendar()?;
+    let mut late_rebalances = 0;
+    for row in &decisions {
+        if row.status == "skipped_late" {
+            late_rebalances += 1;
+        } else if row.status == "planned" {
+            let record = record_from_json(&row.inputs_json)?;
+            let next = calendar.next_session(row.signal_date);
+            if !record.bootstrap
+                && matches!((row.trade_date, next), (Some(trade), Some(next)) if trade > next)
+            {
+                late_rebalances += 1;
+            }
+        }
+    }
+
     let reconciliation_breaks = store
         .halts()?
         .iter()
         .filter(|h| h.reason.starts_with("reconciliation") || h.reason == "foreign_order")
         .count();
 
-    let calendar = store.calendar()?;
     let missed_sessions = store
         .equity_series(Book::Paper)?
         .iter()
@@ -82,6 +101,7 @@ pub fn fidelity(
         replay_mismatches,
         reconciliation_breaks,
         missed_sessions,
+        late_rebalances,
         mean_slippage_bps: mean(&slippage),
         mean_diff_bps: mean(&diffs),
         max_abs_diff_bps: diffs.iter().fold(0.0, |m, d| f64::max(m, d.abs())),
