@@ -73,6 +73,23 @@ pub fn settle(ctx: &LiveContext) -> Result<SettleReport, LiveError> {
         if state == row.state && filled_qty == row.filled_qty {
             continue;
         }
+        if matches!(state, OrderState::Expired | OrderState::Canceled)
+            && filled_qty > 0
+            && filled_qty < row.qty
+        {
+            // Recorded before the state change: a crash between the two can
+            // repeat the alert on the next settle, never lose it.
+            ctx.store.record_alert(
+                "warn",
+                "incomplete_fill",
+                &format!(
+                    "{} order {} ended {state:?} with {} of {} filled",
+                    row.symbol, row.client_order_id, filled_qty, row.qty
+                ),
+                false,
+                ctx.clock.now_utc(),
+            )?;
+        }
         ctx.store.set_order_state(
             &row.client_order_id,
             state,
