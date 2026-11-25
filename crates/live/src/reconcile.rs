@@ -1,6 +1,7 @@
 //! Reconciliation of the local paper book against the broker account.
 
-use pt_alpaca::{account, reference};
+use chrono::{DateTime, Utc};
+use pt_alpaca::{account, orders_read, reference};
 use pt_ops::alert::Level;
 use pt_store::trading::{Book, LedgerEntry};
 
@@ -66,6 +67,16 @@ pub fn reconcile(ctx: &LiveContext<'_>) -> Result<ReconcileReport, LiveError> {
             cash_delta: acct.cash,
             ref_id: None,
         })?;
+    }
+    let mut foreign = Vec::new();
+    for o in orders_read::orders_since(ctx.http, DateTime::<Utc>::UNIX_EPOCH)? {
+        if ctx.store.order(&o.client_order_id)?.is_none() {
+            foreign.push(o.client_order_id);
+        }
+    }
+    if !foreign.is_empty() {
+        let detail = foreign.join(", ");
+        return halt(ctx, "foreign_order", &detail);
     }
     Ok(ReconcileReport {
         clean: true,
