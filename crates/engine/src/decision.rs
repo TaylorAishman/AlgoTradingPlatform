@@ -6,10 +6,12 @@ use pt_config::config::Config;
 use pt_core::money::{Money, Price};
 use pt_core::signal::{RiskEstimates, SignalSet};
 use pt_core::types::{OrderIntent, Positions, Symbol, Weights};
+use pt_core::view::MarketView;
 use pt_portfolio::orders::{plan_orders, target_shares};
 use pt_portfolio::weights::{target_weights, SizingParams};
 use pt_risk::pretrade::{check_orders, Rejection, RiskLimits};
-use pt_strategy::estimate::VolParams;
+use pt_strategy::estimate::{estimate_risk, VolParams};
+use pt_strategy::strategy::Strategy;
 use rust_decimal::prelude::ToPrimitive;
 use rust_decimal::Decimal;
 use std::collections::{BTreeMap, BTreeSet};
@@ -100,4 +102,34 @@ pub fn decide_with(
         orders: gate.approved,
         rejected: gate.rejected,
     })
+}
+
+/// Reads signals, risk and reference closes from the view, then decides.
+/// A symbol with a nonzero weight or a current position must have a bar on
+/// the reference date; otherwise the data is not ready.
+pub fn decide(
+    inputs: &DecisionInputs,
+    strategy: &dyn Strategy,
+    view: &dyn MarketView,
+    p: &DecisionParams,
+) -> Result<Decision, EngineError> {
+    let signals = strategy.signals(&inputs.universe, inputs.signal_date, view)?;
+    let risk = estimate_risk(&inputs.universe, inputs.signal_date, view, &p.vol);
+    let weights = target_weights(&signals.signals, &risk, &inputs.shortable, &p.sizing);
+    let mut ref_prices = BTreeMap::new();
+    for symbol in &inputs.universe {
+        let weighted = weights.get(symbol).is_some_and(|w| !w.is_zero());
+        let held = inputs.positions.get(symbol).is_some_and(|q| *q != 0);
+        if !weighted && !held {
+            continue;
+        }
+        let bar =
+            view.exec_bar(symbol, inputs.ref_date)
+                .ok_or_else(|| EngineError::DataNotReady {
+                    symbol: symbol.to_string(),
+                    date: inputs.ref_date,
+                })?;
+        ref_prices.insert(symbol.clone(), bar.close);
+    }
+    decide_with(signals, risk, inputs, &ref_prices, p)
 }
