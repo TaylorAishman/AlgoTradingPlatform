@@ -6,6 +6,8 @@ use anyhow::Context;
 use chrono::NaiveDate;
 use pt_core::clock::SystemClock;
 use pt_store::db::Store;
+use pt_validate::crosscheck::crosscheck as run_crosscheck;
+use pt_validate::error::ValidateError;
 use pt_validate::overfit::dsr_for_run;
 use pt_validate::runner::{run_and_record, BacktestRequest};
 use rust_decimal::Decimal;
@@ -19,9 +21,11 @@ const INITIAL_CAPITAL: i64 = 100_000;
 pub fn backtest(action: &BacktestCmd) -> anyhow::Result<i32> {
     match action {
         BacktestCmd::Run { from, to, strategy } => run(from, to, strategy.as_deref()),
-        BacktestCmd::Crosscheck { .. } => {
-            anyhow::bail!("`backtest crosscheck` is not implemented yet")
-        }
+        BacktestCmd::Crosscheck {
+            from,
+            to,
+            with_costs,
+        } => crosscheck(from, to, *with_costs),
     }
 }
 
@@ -68,4 +72,38 @@ fn run(from: &str, to: &str, strategy: Option<&str>) -> anyhow::Result<i32> {
     println!("dsr {}", dsr.dsr);
     println!("trials {}", dsr.n_trials);
     Ok(0)
+}
+
+/// Run the engine and vector calculators on the same schedule and compare equity.
+/// Exits 1 when they differ or the run cannot be compared.
+fn crosscheck(from: &str, to: &str, with_costs: bool) -> anyhow::Result<i32> {
+    let cfg = wiring::load_config()?;
+    let req = BacktestRequest {
+        strategy: "tsmom".to_string(),
+        from: date("--from", from)?,
+        to: date("--to", to)?,
+        initial_capital: Decimal::new(INITIAL_CAPITAL, 0),
+    };
+    let path = Path::new(&cfg.run.db_path);
+    let store = Store::open(path).with_context(|| format!("opening store {}", path.display()))?;
+    match run_crosscheck(&store, &cfg, &req, !with_costs, Decimal::ZERO) {
+        Ok(c) => {
+            println!("max_abs_diff {}", c.max_abs_diff.normalize());
+            if c.equal {
+                println!("PASS");
+                Ok(0)
+            } else {
+                println!("FAIL");
+                if let Some(d) = c.first_diff_date {
+                    println!("first_diff_date {d}");
+                }
+                Ok(1)
+            }
+        }
+        Err(e @ ValidateError::NotComparable(_)) => {
+            println!("{e}");
+            Ok(1)
+        }
+        Err(e) => Err(e.into()),
+    }
 }
