@@ -20,10 +20,12 @@ pub struct IngestReport {
     pub complete: bool,
 }
 
-/// R-120: fetches raw and adjusted (`all`) daily bars for every universe
-/// symbol and the risk-free symbol from `cfg.data.start` through `through`,
-/// one request per series, and stores them under `cfg.data.feed` as fetched
-/// at `fetched_at`. Both series are fetched before anything is stored.
+/// R-120, R-122: fetches raw and adjusted (`all`) daily bars for every
+/// universe symbol and the risk-free symbol through `through`, one request
+/// per series, and stores them under `cfg.data.feed` as fetched at
+/// `fetched_at`. Adjusted bars are always fetched from `cfg.data.start`; raw
+/// bars from five sessions before the oldest latest stored raw bar. Both
+/// series are fetched before anything is stored.
 pub fn ingest(
     store: &Store,
     http: &HttpClient,
@@ -35,7 +37,8 @@ pub fn ingest(
     let feed = cfg.data.feed.as_str();
     let start = cfg.data.start;
 
-    let raw_rows = fetch(http, &symbols, start, through, Adjustment::Raw, feed)?;
+    let raw_start = raw_start(store, &symbols, start, through, feed)?;
+    let raw_rows = fetch(http, &symbols, raw_start, through, Adjustment::Raw, feed)?;
     let adjusted_rows = fetch(http, &symbols, start, through, Adjustment::All, feed)?;
 
     let complete =
@@ -47,6 +50,40 @@ pub fn ingest(
         adjusted,
         complete,
     })
+}
+
+/// Sessions of overlap refetched for raw bars.
+const RAW_OVERLAP_SESSIONS: usize = 5;
+
+/// Where the raw fetch starts: five sessions before the earliest of the
+/// symbols' latest stored raw bars, or `start` when any symbol has none.
+fn raw_start(
+    store: &Store,
+    symbols: &[String],
+    start: NaiveDate,
+    through: NaiveDate,
+    feed: &str,
+) -> Result<NaiveDate, DataError> {
+    let mut oldest_latest: Option<NaiveDate> = None;
+    for name in symbols {
+        let Ok(symbol) = Symbol::new(name) else {
+            return Ok(start);
+        };
+        let bars = store.bars_asof(&symbol, Adjustment::Raw, feed, start, through, None)?;
+        let Some(last) = bars.last() else {
+            return Ok(start);
+        };
+        oldest_latest = Some(oldest_latest.map_or(last.date, |d| d.min(last.date)));
+    }
+    let Some(latest) = oldest_latest else {
+        return Ok(start);
+    };
+    let Ok(calendar) = store.calendar() else {
+        return Ok(start);
+    };
+    let sessions = calendar.sessions_between(start, latest);
+    let back = sessions.len().saturating_sub(1 + RAW_OVERLAP_SESSIONS);
+    Ok(sessions.get(back).copied().unwrap_or(start).max(start))
 }
 
 /// The universe symbols followed by the risk-free symbol, without repeats.
