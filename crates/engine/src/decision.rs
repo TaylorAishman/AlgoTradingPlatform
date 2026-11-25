@@ -133,3 +133,79 @@ pub fn decide(
     }
     decide_with(signals, risk, inputs, &ref_prices, p)
 }
+
+/// Non-finite values (NaN, infinities) become `null`.
+fn f64_json(x: f64) -> serde_json::Value {
+    serde_json::Number::from_f64(x).map_or(serde_json::Value::Null, serde_json::Value::Number)
+}
+
+fn float_map_json(m: &BTreeMap<Symbol, f64>) -> serde_json::Value {
+    m.iter()
+        .map(|(k, v)| (k.to_string(), f64_json(*v)))
+        .collect::<serde_json::Map<_, _>>()
+        .into()
+}
+
+fn reasons_json(m: &BTreeMap<Symbol, String>) -> serde_json::Value {
+    m.iter()
+        .map(|(k, v)| (k.to_string(), serde_json::Value::from(v.as_str())))
+        .collect::<serde_json::Map<_, _>>()
+        .into()
+}
+
+fn order_json(o: &OrderIntent) -> serde_json::Value {
+    serde_json::json!({
+        "symbol": o.symbol.to_string(),
+        "side": match o.side {
+            pt_core::types::Side::Buy => "buy",
+            pt_core::types::Side::Sell => "sell",
+        },
+        "qty": o.qty,
+        "leg": o.leg,
+        "reference_price": o.reference_price.value().to_string(),
+    })
+}
+
+/// The decision as canonical JSON: sorted keys, no extra whitespace and
+/// decimals written as strings, so equal decisions give equal text.
+pub fn decision_to_json(d: &Decision) -> String {
+    let cov: Vec<serde_json::Value> = d
+        .risk
+        .cov
+        .iter()
+        .map(|((a, b), v)| serde_json::json!([a.to_string(), b.to_string(), f64_json(*v)]))
+        .collect();
+    let weights: serde_json::Map<_, _> = d
+        .weights
+        .iter()
+        .map(|(k, v)| (k.to_string(), serde_json::Value::from(format!("{v:.6}"))))
+        .collect();
+    let target: serde_json::Map<_, _> = d
+        .target
+        .iter()
+        .map(|(k, v)| (k.to_string(), serde_json::Value::from(*v)))
+        .collect();
+    let rejected: Vec<serde_json::Value> = d
+        .rejected
+        .iter()
+        .map(|(o, r)| serde_json::json!({ "order": order_json(o), "reason": format!("{r:?}") }))
+        .collect();
+    let value = serde_json::json!({
+        "signals": {
+            "asof": d.signals.asof.to_string(),
+            "signals": float_map_json(&d.signals.signals),
+            "ineligible": reasons_json(&d.signals.ineligible),
+        },
+        "risk": {
+            "asof": d.risk.asof.to_string(),
+            "vols": float_map_json(&d.risk.vols),
+            "cov": cov,
+            "ineligible": reasons_json(&d.risk.ineligible),
+        },
+        "weights": weights,
+        "target": target,
+        "orders": d.orders.iter().map(order_json).collect::<Vec<_>>(),
+        "rejected": rejected,
+    });
+    value.to_string()
+}
