@@ -5,6 +5,7 @@
 //! posted with the permit and then marked `Submitted` with the broker's id.
 
 use chrono::NaiveDate;
+use pt_alpaca::error::AlpacaError;
 use pt_alpaca::orders_read::order_by_client_id;
 use pt_alpaca::orders_write::{submit_order, NewOrder};
 use pt_core::order_state::OrderState;
@@ -32,7 +33,7 @@ pub struct SubmitReport {
 /// already holds that client order id, and only if it does not is the order
 /// posted with the permit. An accepted order is marked `Submitted` with the
 /// broker's order id. An intent whose session has passed is abandoned and
-/// alerted instead of sent. A gate refusal stops the call before anything is sent.
+/// alerted instead of sent. A broker rejection marks that order `Rejected`, alerts and carries on. A gate refusal stops the call before anything is sent.
 pub fn submit_planned(ctx: &LiveContext, auth: &AuthContext) -> Result<SubmitReport, LiveError> {
     let mut report = SubmitReport::default();
     // Fetched once, after the first gate check, so no network call precedes it.
@@ -76,7 +77,35 @@ pub fn submit_planned(ctx: &LiveContext, auth: &AuthContext) -> Result<SubmitRep
             report.adopted += 1;
             continue;
         }
-        let wire = submit_order(ctx.http, permit, &order)?;
+        let wire = match submit_order(ctx.http, permit, &order) {
+            Ok(wire) => wire,
+            Err(AlpacaError::Rejected { status, message }) => {
+                // The broker refused this order: record it and carry on (R-286).
+                let now = ctx.clock.now_utc();
+                ctx.store.set_order_state(
+                    &row.client_order_id,
+                    OrderState::Rejected,
+                    0,
+                    None,
+                    now,
+                )?;
+                ctx.alerter.alert(
+                    ctx.store,
+                    Level::Warn,
+                    "order_rejected",
+                    &format!(
+                        "order {} for {} rejected by the broker (HTTP {status}): {message}",
+                        row.client_order_id,
+                        row.symbol.as_str()
+                    ),
+                    None,
+                    now,
+                );
+                report.rejected += 1;
+                continue;
+            }
+            Err(other) => return Err(other.into()),
+        };
         ctx.store.set_order_state(
             &row.client_order_id,
             OrderState::Submitted,
