@@ -86,8 +86,20 @@ impl MarketView for StoreView {
         self.exec.get(symbol)?.get(&date).cloned()
     }
 
-    // Stub: G03 implements average volume.
-    fn adv_shares(&self, _symbol: &Symbol, _asof: NaiveDate, _sessions: usize) -> Option<f64> {
-        None
+    fn adv_shares(&self, symbol: &Symbol, asof: NaiveDate, sessions: usize) -> Option<f64> {
+        if sessions == 0 {
+            return None;
+        }
+        let series = self.exec.get(symbol)?;
+        let volumes: Vec<f64> = series
+            .range(..=asof)
+            .rev()
+            .take(sessions)
+            .map(|(_, b)| b.volume as f64)
+            .collect();
+        if volumes.len() < sessions {
+            return None;
+        }
+        Some(volumes.iter().sum::<f64>() / sessions as f64)
     }
 }
