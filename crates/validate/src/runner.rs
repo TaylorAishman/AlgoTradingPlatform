@@ -1,11 +1,28 @@
-//! Backtest runner: the request and the trial hash that identifies a trial.
+//! Backtest runner: the request, the trial hash that identifies a trial, and the
+//! research run that is stored.
 
+use std::collections::BTreeSet;
 use std::fmt::Write as _;
+use std::sync::Arc;
 
 use chrono::NaiveDate;
+use pt_calendar::schedule::monthly_schedule;
 use pt_config::config::Config;
+use pt_config::hash::config_hash;
+use pt_core::clock::Clock;
+use pt_core::types::{PriceBasis, Symbol};
+use pt_data::view::StoreView;
+use pt_engine::decision::params_from_config;
+use pt_engine::schedule::run_backtest;
+use pt_engine::simulate::{SimConfig, SimResult};
+use pt_store::db::Store;
+use pt_strategy::benchmark::LongOnly;
+use pt_strategy::strategy::Strategy;
+use pt_strategy::tsmom::{Tsmom, TsmomParams};
 use rust_decimal::Decimal;
 use sha2::{Digest, Sha256};
+
+use crate::error::ValidateError;
 
 /// What to backtest: one strategy over an inclusive date range.
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -83,4 +100,125 @@ pub fn trial_hash(cfg: &Config, req: &BacktestRequest, params: &str) -> String {
         let _ = write!(hex, "{b:02x}");
     }
     hex
+}
+
+/// Summary statistics of a backtest.
+#[derive(Debug, Clone, PartialEq)]
+pub struct Metrics {
+    pub sharpe: f64,
+    pub cagr: f64,
+    pub vol: f64,
+    pub max_drawdown: f64,
+    pub turnover: f64,
+    pub cost_total: Decimal,
+    pub borrow_total: Decimal,
+    pub n_obs: usize,
+}
+
+impl Metrics {
+    /// The metrics of `result`. Only the totals and the count are filled in for now.
+    fn from_result(result: &SimResult) -> Metrics {
+        Metrics {
+            sharpe: 0.0,
+            cagr: 0.0,
+            vol: 0.0,
+            max_drawdown: 0.0,
+            turnover: 0.0,
+            cost_total: result.cost_total,
+            borrow_total: result.borrow_total,
+            n_obs: result.equity.len().saturating_sub(1),
+        }
+    }
+}
+
+/// A stored research backtest.
+#[derive(Debug, Clone, PartialEq)]
+pub struct BacktestOutcome {
+    pub run_id: i64,
+    pub trial_hash: String,
+    pub metrics: Metrics,
+    pub result: SimResult,
+}
+
+fn symbol(s: &str) -> Result<Symbol, ValidateError> {
+    Symbol::new(s).map_err(|e| ValidateError::Invalid(format!("symbol {s:?}: {e}")))
+}
+
+/// Run `req` on adjusted prices with the research cost profile and store its equity.
+pub fn run_and_record(
+    store: &Store,
+    cfg: &Config,
+    req: &BacktestRequest,
+    clock: &dyn Clock,
+) -> Result<BacktestOutcome, ValidateError> {
+    let cal = Arc::new(store.calendar()?);
+    let universe = cfg
+        .universe
+        .iter()
+        .map(|i| symbol(&i.symbol))
+        .collect::<Result<Vec<_>, _>>()?;
+    let shortable: BTreeSet<Symbol> = cfg
+        .universe
+        .iter()
+        .zip(&universe)
+        .filter(|(i, _)| i.shortable)
+        .map(|(_, s)| s.clone())
+        .collect();
+    let risk_free = symbol(&cfg.strategy.risk_free_symbol)?;
+
+    let strategy: Box<dyn Strategy> = match req.strategy.as_str() {
+        "tsmom" => Box::new(Tsmom::new(
+            TsmomParams {
+                lookback_months: cfg.strategy.lookback_months.clone(),
+                risk_free_symbol: risk_free.clone(),
+            },
+            Arc::clone(&cal),
+        )),
+        "benchmark" => Box::new(LongOnly::new(Arc::clone(&cal))),
+        other => {
+            return Err(ValidateError::Invalid(format!(
+                "unknown strategy {other:?}"
+            )))
+        }
+    };
+
+    let mut symbols = universe.clone();
+    if !symbols.contains(&risk_free) {
+        symbols.push(risk_free);
+    }
+    let view = StoreView::load(store, &symbols, &cfg.data.feed, PriceBasis::Adjusted, None)?;
+    let params = params_from_config(cfg);
+    let sim = SimConfig {
+        start: req.from,
+        end: req.to,
+        initial_capital: req.initial_capital,
+        cost: cfg.cost.research,
+        limits: params.limits.clone(),
+        universe,
+    };
+    let schedule = monthly_schedule(&cal, req.from, req.to);
+    let result = run_backtest(
+        &sim,
+        &schedule,
+        &shortable,
+        strategy.as_ref(),
+        &view,
+        &cal,
+        &params,
+    )?;
+
+    let hash = trial_hash(cfg, req, &strategy.params_canonical());
+    let run_id = store.save_backtest(
+        strategy.id(),
+        &hash,
+        &config_hash(cfg),
+        &result.equity,
+        clock.now_utc(),
+    )?;
+    Ok(BacktestOutcome {
+        run_id,
+        trial_hash: hash,
+        metrics: Metrics::from_result(&result),
+        result,
+    })
 }
