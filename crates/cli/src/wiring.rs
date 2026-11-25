@@ -1,9 +1,17 @@
 //! Shared wiring for the command modules.
 
+use std::collections::BTreeMap;
 use std::path::PathBuf;
+use std::sync::Arc;
 
 use anyhow::{anyhow, Context};
+use pt_alpaca::auth::Credentials;
+use pt_alpaca::endpoints::Endpoints;
+use pt_alpaca::http::HttpClient;
+use pt_alpaca::limiter::{RateLimiter, Sleeper, SystemClock, ThreadSleeper};
 use pt_config::config::Config;
+use pt_config::error::ConfigError;
+use pt_config::secrets::{load_api_keys, ApiKeys};
 use pt_gate::error::GateError;
 use pt_gate::owner::{load_owner_file, OwnerFile, Stage};
 
@@ -97,4 +105,51 @@ pub fn stage_refusal(command: &str, required: Stage) -> anyhow::Result<Option<St
         stage_name(required),
         stage_name(current)
     )))
+}
+
+/// Calls per minute the client allows itself. The Basic plan allows 200
+/// historical data requests per minute; architecture.md (line 82) says the
+/// client limits itself to 180, leaving headroom.
+const REQUESTS_PER_MINUTE: u32 = 180;
+
+/// Load the API keys from the environment or `PT_SECRETS_FILE`. A failure names
+/// the variables to set and never includes a key value.
+pub fn load_keys() -> anyhow::Result<ApiKeys> {
+    let env: BTreeMap<String, String> =
+        ["APCA_API_KEY_ID", "APCA_API_SECRET_KEY", "PT_SECRETS_FILE"]
+            .iter()
+            .filter_map(|name| std::env::var(name).ok().map(|v| ((*name).to_string(), v)))
+            .collect();
+    load_api_keys(&env).map_err(|err| match err {
+        ConfigError::MissingCredentials => anyhow!(
+            "API keys are missing: set both APCA_API_KEY_ID and APCA_API_SECRET_KEY, \
+             or set PT_SECRETS_FILE to a TOML file with key_id and secret_key"
+        ),
+        other => anyhow!("API keys could not be loaded from PT_SECRETS_FILE: {other}"),
+    })
+}
+
+/// Load the keys and build the Alpaca client. The hosts come from
+/// `pt_alpaca::endpoints`; `PT_ALPACA_TRADING_URL` and `PT_ALPACA_DATA_URL`
+/// override them only for loopback hosts.
+pub fn build_client() -> anyhow::Result<HttpClient> {
+    let keys = load_keys()?;
+    let trading = std::env::var("PT_ALPACA_TRADING_URL").ok();
+    let data = std::env::var("PT_ALPACA_DATA_URL").ok();
+    let endpoints = if trading.is_some() || data.is_some() {
+        Endpoints::with_overrides(trading.as_deref(), data.as_deref())?
+    } else {
+        Endpoints::production()
+    };
+    let creds = Credentials::new(
+        keys.key_id.expose().to_string(),
+        keys.secret_key.expose().to_string(),
+    );
+    let sleeper: Arc<dyn Sleeper> = Arc::new(ThreadSleeper);
+    let limiter = RateLimiter::new(
+        REQUESTS_PER_MINUTE,
+        Arc::new(SystemClock::new()),
+        sleeper.clone(),
+    );
+    Ok(HttpClient::new(endpoints, creds, limiter, sleeper))
 }

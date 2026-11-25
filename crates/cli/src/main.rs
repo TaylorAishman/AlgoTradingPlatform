@@ -48,6 +48,9 @@ fn dispatch(cli: &Cli) -> anyhow::Result<i32> {
             eprintln!("error: {message}");
             return Ok(EXIT_STAGE_FORBIDS);
         }
+        // Every command with a minimum stage talks to the network. The client is
+        // not used by the stub command modules yet.
+        let _client = wiring::build_client()?;
     }
     match &cli.command {
         Command::Config { action } => cmd_config::config(action),
