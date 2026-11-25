@@ -2,10 +2,13 @@
 
 use crate::decision::DecisionParams;
 use crate::error::EngineError;
+use crate::simulate::{simulate, SimConfig, SimResult};
 use chrono::NaiveDate;
+use pt_calendar::calendar::TradingCalendar;
 use pt_calendar::schedule::Rebalance;
 use pt_core::types::{Symbol, Weights};
 use pt_core::view::HistoryView;
+use pt_core::view::MarketView;
 use pt_portfolio::weights::target_weights;
 use pt_strategy::estimate::estimate_risk;
 use pt_strategy::strategy::Strategy;
@@ -29,4 +32,18 @@ pub fn weights_schedule(
         out.insert(r.trade_date, weights);
     }
     Ok(out)
+}
+
+/// A backtest: the simulation of the strategy's own weight schedule.
+pub fn run_backtest(
+    cfg: &SimConfig,
+    schedule: &[Rebalance],
+    shortable: &BTreeSet<Symbol>,
+    strategy: &dyn Strategy,
+    view: &dyn MarketView,
+    cal: &TradingCalendar,
+    p: &DecisionParams,
+) -> Result<SimResult, EngineError> {
+    let weights = weights_schedule(schedule, &cfg.universe, shortable, strategy, view, p)?;
+    simulate(cfg, &weights, view, cal)
 }
