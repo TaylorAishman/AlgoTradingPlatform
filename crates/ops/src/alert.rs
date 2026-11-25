@@ -52,7 +52,8 @@ impl Alerter {
         run_id: Option<i64>,
         at: DateTime<Utc>,
     ) -> bool {
-        let _ = &self.secrets;
+        let message = self.scrub(message);
+        let message = message.as_str();
         eprintln!("{}", format_event(level.as_str(), message, run_id, at));
         let delivered = self.post(level, code, message, run_id, at);
         if let Err(e) = store.record_alert(level.as_str(), code, message, delivered, at) {
@@ -62,6 +63,15 @@ impl Alerter {
             );
         }
         delivered
+    }
+
+    /// Replace every occurrence of each secret string with `***`.
+    fn scrub(&self, text: &str) -> String {
+        let mut out = text.to_string();
+        for secret in self.secrets.iter().filter(|s| !s.is_empty()) {
+            out = out.replace(secret.as_str(), "***");
+        }
+        out
     }
 
     /// POST the alert as JSON to the webhook; true when it answered with success.
