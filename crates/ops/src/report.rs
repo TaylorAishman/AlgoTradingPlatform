@@ -5,7 +5,7 @@ use chrono::{DateTime, Utc};
 use pt_config::config::Config;
 use pt_core::types::Adjustment;
 use pt_store::db::Store;
-use pt_store::trading::Book;
+use pt_store::trading::{Book, Mode};
 use rust_decimal::prelude::ToPrimitive;
 use serde_json::{json, Value};
 use std::path::PathBuf;
@@ -63,22 +63,62 @@ fn status_json(inp: &ReportInputs) -> Result<Value, OpsError> {
             .checked_div(s.equity)
             .and_then(|g| g.to_f64())
     });
+    let last_run = inp.store.runs()?.pop().map(|r| {
+        json!({
+            "id": r.id,
+            "stage": r.stage,
+            "status": r.status,
+            "started_at": r.started_at.to_rfc3339(),
+            "finished_at": r.finished_at.map(|t| t.to_rfc3339()),
+        })
+    });
+    let snaps: Vec<_> = series.iter().map(|s| (s.date, s.equity)).collect();
+    let pnl = latest
+        .and_then(|s| crate::pnl::pnl(&snaps, s.date))
+        .map(|p| {
+            json!({
+                "day": p.day.to_string(),
+                "mtd": p.mtd.to_string(),
+                "ytd": p.ytd.to_string(),
+                "inception": p.inception.to_string(),
+            })
+        });
+    let halts: Vec<Value> = inp
+        .store
+        .active_halts()?
+        .into_iter()
+        .map(|h| json!({"reason": h.reason, "detail": h.detail, "set_at": h.set_at.to_rfc3339()}))
+        .collect();
+    let last_rebalance = inp
+        .store
+        .decisions(Mode::Paper)?
+        .into_iter()
+        .max_by_key(|d| (d.signal_date, d.id))
+        .map(|d| {
+            json!({
+                "signal_date": d.signal_date.to_string(),
+                "trade_date": d.trade_date.map(|t| t.to_string()),
+                "status": d.status,
+                "created_at": d.created_at.to_rfc3339(),
+            })
+        });
+    let trial_count = inp.store.trials(&inp.cfg.strategy.id)?.len();
     Ok(json!({
         "generated_at": inp.now.to_rfc3339(),
         "stage": inp.stage,
         "feed": feed,
         "basis": "price_return",
-        "last_run": Value::Null,
+        "last_run": last_run,
         "equity": latest.map(|s| s.equity.to_string()),
         "cash": latest.map(|s| s.cash.to_string()),
         "gross_exposure": gross,
-        "pnl": Value::Null,
+        "pnl": pnl,
         "positions": positions,
-        "last_rebalance": Value::Null,
-        "active_halts": Vec::<Value>::new(),
-        "trial_count": Value::Null,
+        "last_rebalance": last_rebalance,
+        "active_halts": halts,
+        "trial_count": trial_count,
         "fidelity": inp.fidelity.iter().map(|(k, v)| json!({"label": k, "value": v})).collect::<Vec<_>>(),
         "validation_signoff": inp.validation_signoff,
-        "disclaimer": Value::Null,
+        "disclaimer": "Paper trading. Not investment advice.",
     }))
 }
