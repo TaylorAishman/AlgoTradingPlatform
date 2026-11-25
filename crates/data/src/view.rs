@@ -2,8 +2,8 @@
 
 use crate::error::DataError;
 use chrono::{DateTime, NaiveDate, Utc};
-use pt_core::types::{Adjustment, PriceBasis, Symbol};
-use pt_core::view::HistoryView;
+use pt_core::types::{Adjustment, Bar, PriceBasis, Symbol};
+use pt_core::view::{HistoryView, MarketView};
 use pt_store::db::Store;
 use rust_decimal::prelude::ToPrimitive;
 use std::collections::BTreeMap;
@@ -12,6 +12,7 @@ use std::collections::BTreeMap;
 #[derive(Debug, Clone)]
 pub struct StoreView {
     adj: BTreeMap<Symbol, BTreeMap<NaiveDate, f64>>,
+    exec: BTreeMap<Symbol, BTreeMap<NaiveDate, Bar>>,
 }
 
 impl StoreView {
@@ -21,10 +22,15 @@ impl StoreView {
         store: &Store,
         symbols: &[Symbol],
         feed: &str,
-        _basis: PriceBasis,
+        basis: PriceBasis,
         asof: Option<DateTime<Utc>>,
     ) -> Result<StoreView, DataError> {
+        let exec_adjustment = match basis {
+            PriceBasis::Raw => Adjustment::Raw,
+            PriceBasis::Adjusted => Adjustment::All,
+        };
         let mut adj = BTreeMap::new();
+        let mut exec = BTreeMap::new();
         for symbol in symbols {
             let bars = store.bars_asof(
                 symbol,
@@ -42,8 +48,20 @@ impl StoreView {
                 series.insert(bar.date, close);
             }
             adj.insert(symbol.clone(), series);
+            let exec_bars = store.bars_asof(
+                symbol,
+                exec_adjustment,
+                feed,
+                NaiveDate::from_ymd_opt(1, 1, 1).unwrap_or(NaiveDate::MIN),
+                NaiveDate::from_ymd_opt(9999, 12, 31).unwrap_or(NaiveDate::MAX),
+                asof,
+            )?;
+            exec.insert(
+                symbol.clone(),
+                exec_bars.into_iter().map(|b| (b.date, b)).collect(),
+            );
         }
-        Ok(StoreView { adj })
+        Ok(StoreView { adj, exec })
     }
 }
 
@@ -60,5 +78,16 @@ impl HistoryView for StoreView {
             .collect();
         out.reverse();
         out
+    }
+}
+
+impl MarketView for StoreView {
+    fn exec_bar(&self, symbol: &Symbol, date: NaiveDate) -> Option<Bar> {
+        self.exec.get(symbol)?.get(&date).cloned()
+    }
+
+    // Stub: G03 implements average volume.
+    fn adv_shares(&self, _symbol: &Symbol, _asof: NaiveDate, _sessions: usize) -> Option<f64> {
+        None
     }
 }
