@@ -88,17 +88,30 @@ impl HttpClient {
     }
 
     fn get(&self, url: &str) -> Result<String, AlpacaError> {
+        self.with_retries(true, || self.get_once(url))
+    }
+
+    /// Sends a request through `once` until it succeeds or may not be sent
+    /// again. A 429 is retried after 15, 30, 45 and 60 s (R-085). A 5xx is
+    /// retried after 1, 2, 4 and 8 s only when `retry_server` is true (R-086);
+    /// an order POST passes false, because the broker may already hold the
+    /// order (R-101). Any other error is returned at once.
+    fn with_retries(
+        &self,
+        retry_server: bool,
+        once: impl Fn() -> Result<String, AlpacaError>,
+    ) -> Result<String, AlpacaError> {
         let mut retries = 0;
         let mut server_retries = 0;
         loop {
-            match self.get_once(url) {
+            match once() {
                 Err(AlpacaError::RateLimited) if retries < RATE_LIMIT_WAITS_SECS.len() => {
                     self.sleeper
                         .sleep(Duration::from_secs(RATE_LIMIT_WAITS_SECS[retries]));
                     retries += 1;
                 }
                 Err(AlpacaError::Server { .. })
-                    if server_retries < SERVER_ERROR_WAITS_SECS.len() =>
+                    if retry_server && server_retries < SERVER_ERROR_WAITS_SECS.len() =>
                 {
                     self.sleeper
                         .sleep(Duration::from_secs(SERVER_ERROR_WAITS_SECS[server_retries]));
@@ -111,26 +124,79 @@ impl HttpClient {
 
     fn get_once(&self, url: &str) -> Result<String, AlpacaError> {
         self.limiter.acquire();
-        let mut resp = self
+        let resp = self
             .agent
             .get(url)
             .header("APCA-API-KEY-ID", self.creds.key_id())
             .header("APCA-API-SECRET-KEY", self.creds.secret_key())
-            .call()
-            .map_err(|e| AlpacaError::Transport(e.to_string()))?;
-        let status = resp.status().as_u16();
-        let body = resp
-            .body_mut()
-            .read_to_string()
-            .map_err(|e| AlpacaError::Transport(e.to_string()))?;
-        match status {
-            200..=299 => Ok(body),
-            429 => Err(AlpacaError::RateLimited),
-            500..=599 => Err(AlpacaError::Server { status }),
-            _ => Err(AlpacaError::Rejected {
-                status,
-                message: body,
-            }),
-        }
+            .call();
+        read_reply(resp)
+    }
+
+    /// POST `json` to `path` on the trading base URL and return the body of a
+    /// 2xx reply. Sent again, with the same body, only after a 429 (R-085). A
+    /// 5xx, any other 4xx and a transport error are never retried (R-101).
+    ///
+    /// `pub(crate)` on purpose: only `submit_order`, which holds a permit, may
+    /// send a POST (architecture D-17).
+    pub(crate) fn post_trading(&self, path: &str, json: &str) -> Result<String, AlpacaError> {
+        let url = format!("{}{}", self.endpoints.trading(), path);
+        self.with_retries(false, || self.post_once(&url, json))
+    }
+
+    fn post_once(&self, url: &str, json: &str) -> Result<String, AlpacaError> {
+        self.limiter.acquire();
+        let resp = self
+            .agent
+            .post(url)
+            .header("APCA-API-KEY-ID", self.creds.key_id())
+            .header("APCA-API-SECRET-KEY", self.creds.secret_key())
+            .header("Content-Type", "application/json")
+            .send(json);
+        read_reply(resp)
+    }
+
+    /// DELETE `path` on the trading base URL and return the body of a 2xx
+    /// reply. A 429 and a 5xx are retried as for a GET (R-085, R-086);
+    /// cancelling twice cannot create anything. Any other 4xx and a
+    /// transport error are never retried.
+    ///
+    /// `pub(crate)` on purpose: orders are cancelled only through
+    /// `cancel_order`.
+    pub(crate) fn delete_trading(&self, path: &str) -> Result<String, AlpacaError> {
+        let url = format!("{}{}", self.endpoints.trading(), path);
+        self.with_retries(true, || self.delete_once(&url))
+    }
+
+    fn delete_once(&self, url: &str) -> Result<String, AlpacaError> {
+        self.limiter.acquire();
+        let resp = self
+            .agent
+            .delete(url)
+            .header("APCA-API-KEY-ID", self.creds.key_id())
+            .header("APCA-API-SECRET-KEY", self.creds.secret_key())
+            .call();
+        read_reply(resp)
+    }
+}
+
+/// Maps a reply to the body of a 2xx, or to the error for its status.
+fn read_reply(
+    resp: Result<ureq::http::Response<ureq::Body>, ureq::Error>,
+) -> Result<String, AlpacaError> {
+    let mut resp = resp.map_err(|e| AlpacaError::Transport(e.to_string()))?;
+    let status = resp.status().as_u16();
+    let body = resp
+        .body_mut()
+        .read_to_string()
+        .map_err(|e| AlpacaError::Transport(e.to_string()))?;
+    match status {
+        200..=299 => Ok(body),
+        429 => Err(AlpacaError::RateLimited),
+        500..=599 => Err(AlpacaError::Server { status }),
+        _ => Err(AlpacaError::Rejected {
+            status,
+            message: body,
+        }),
     }
 }
