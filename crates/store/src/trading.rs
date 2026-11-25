@@ -70,6 +70,18 @@ pub struct OrderRow {
 const ORDER_COLUMNS: &str = "client_order_id, decision_id, symbol, side, qty, leg, state, \
      broker_order_id, filled_qty, reference_price, trade_date";
 
+/// One broker fill, keyed by its activity id.
+#[derive(Debug, Clone, PartialEq)]
+pub struct FillRow {
+    pub activity_id: String,
+    pub broker_order_id: String,
+    pub symbol: Symbol,
+    pub side: Side,
+    pub qty: u64,
+    pub price: Decimal,
+    pub at: DateTime<Utc>,
+}
+
 fn side_to_text(s: Side) -> &'static str {
     match s {
         Side::Buy => "buy",
@@ -379,6 +391,50 @@ impl Store {
         let mut out = Vec::new();
         while let Some(r) = rows.next()? {
             out.push(order_from_row(r)?);
+        }
+        Ok(out)
+    }
+
+    /// Records a fill. Returns true when a row was inserted, false when the
+    /// activity id is already stored (the first row is kept).
+    pub fn insert_fill(&self, f: &FillRow) -> Result<bool, StoreError> {
+        let n = self.conn.execute(
+            "INSERT OR IGNORE INTO fills (activity_id, broker_order_id, symbol, side, qty, \
+             price, at) VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7)",
+            params![
+                f.activity_id,
+                f.broker_order_id,
+                f.symbol.as_str(),
+                side_to_text(f.side),
+                to_i64(f.qty, "qty")?,
+                dec_to_text(f.price),
+                time_to_text(f.at),
+            ],
+        )?;
+        Ok(n == 1)
+    }
+
+    /// All fills, in insertion order.
+    pub fn fills(&self) -> Result<Vec<FillRow>, StoreError> {
+        let mut stmt = self.conn.prepare(
+            "SELECT activity_id, broker_order_id, symbol, side, qty, price, at \
+             FROM fills ORDER BY rowid",
+        )?;
+        let mut rows = stmt.query([])?;
+        let mut out = Vec::new();
+        while let Some(r) = rows.next()? {
+            let qty: i64 = r.get(4)?;
+            out.push(FillRow {
+                activity_id: r.get(0)?,
+                broker_order_id: r.get(1)?,
+                symbol: Symbol::new(&r.get::<_, String>(2)?)
+                    .map_err(|e| StoreError::Codec(format!("invalid symbol: {e}")))?,
+                side: text_to_side(&r.get::<_, String>(3)?)?,
+                qty: u64::try_from(qty)
+                    .map_err(|_| StoreError::Codec(format!("invalid qty {qty}")))?,
+                price: text_to_dec(&r.get::<_, String>(5)?)?,
+                at: text_to_time(&r.get::<_, String>(6)?)?,
+            });
         }
         Ok(out)
     }
