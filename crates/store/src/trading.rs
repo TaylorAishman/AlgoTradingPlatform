@@ -1,9 +1,9 @@
 //! Repositories for decisions, orders, fills and the ledgers.
 
-use chrono::{DateTime, NaiveDate, SecondsFormat, Utc};
-use pt_core::order_state::OrderState;
+use chrono::{DateTime, NaiveDate, NaiveTime, SecondsFormat, Utc};
+use pt_core::order_state::{transition_allowed, OrderState};
 use pt_core::types::{Side, Symbol};
-use rusqlite::{params, params_from_iter, Row};
+use rusqlite::{params, params_from_iter, Row, Transaction, TransactionBehavior};
 use rust_decimal::Decimal;
 
 use crate::codec::{dec_to_text, text_to_dec};
@@ -248,9 +248,14 @@ impl Store {
         Ok(out)
     }
 
-    /// Inserts an order. A repeated `client_order_id` is `StoreError::Duplicate`.
+    /// Inserts an order and its creation event (`from_state` NULL) in one
+    /// transaction. A repeated `client_order_id` is `StoreError::Duplicate`.
     pub fn insert_order(&self, o: &OrderRow) -> Result<(), StoreError> {
-        let res = self.conn.execute(
+        let tx = Transaction::new_unchecked(&self.conn, TransactionBehavior::Immediate)?;
+        // The creation event is stamped with the trade date at 00:00:00 UTC: library
+        // crates read no wall clock and this signature carries no time.
+        let created_at = o.trade_date.and_time(NaiveTime::MIN).and_utc();
+        let res = tx.execute(
             "INSERT INTO orders (client_order_id, decision_id, symbol, side, qty, leg, state, \
              broker_order_id, filled_qty, reference_price, trade_date) \
              VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11)",
@@ -269,17 +274,85 @@ impl Store {
             ],
         );
         match res {
-            Ok(_) => Ok(()),
+            Ok(_) => {}
             Err(rusqlite::Error::SqliteFailure(f, _))
                 if f.extended_code == rusqlite::ffi::SQLITE_CONSTRAINT_PRIMARYKEY =>
             {
-                Err(StoreError::Duplicate(format!(
+                return Err(StoreError::Duplicate(format!(
                     "order {}",
                     o.client_order_id
-                )))
+                )));
             }
-            Err(e) => Err(e.into()),
+            Err(e) => return Err(e.into()),
         }
+        tx.execute(
+            "INSERT INTO order_events (client_order_id, from_state, to_state, filled_qty, \
+             broker_order_id, at) VALUES (?1, NULL, ?2, ?3, ?4, ?5)",
+            params![
+                o.client_order_id,
+                state_to_text(o.state),
+                to_i64(o.filled_qty, "filled_qty")?,
+                o.broker_order_id,
+                time_to_text(created_at),
+            ],
+        )?;
+        tx.commit()?;
+        Ok(())
+    }
+
+    /// Moves an order to `to`, checked against the transition table, and
+    /// appends an `order_events` row, both in one transaction. A `None`
+    /// `broker_order_id` keeps the stored one. An illegal transition is
+    /// `StoreError::IllegalTransition` and writes nothing; an unknown id is
+    /// `StoreError::NotFound`.
+    pub fn set_order_state(
+        &self,
+        client_order_id: &str,
+        to: OrderState,
+        filled_qty: u64,
+        broker_order_id: Option<&str>,
+        at: DateTime<Utc>,
+    ) -> Result<(), StoreError> {
+        let tx = Transaction::new_unchecked(&self.conn, TransactionBehavior::Immediate)?;
+        let current: Option<(String, Option<String>)> = {
+            let mut stmt =
+                tx.prepare("SELECT state, broker_order_id FROM orders WHERE client_order_id = ?1")?;
+            let mut rows = stmt.query(params![client_order_id])?;
+            match rows.next()? {
+                Some(r) => Some((r.get(0)?, r.get(1)?)),
+                None => None,
+            }
+        };
+        let (from_text, stored_broker) =
+            current.ok_or_else(|| StoreError::NotFound(format!("order {client_order_id}")))?;
+        let from = text_to_state(&from_text)?;
+        if !transition_allowed(from, to) {
+            return Err(StoreError::IllegalTransition {
+                from: state_to_text(from).to_string(),
+                to: state_to_text(to).to_string(),
+            });
+        }
+        let broker = broker_order_id.map(str::to_string).or(stored_broker);
+        let filled = to_i64(filled_qty, "filled_qty")?;
+        tx.execute(
+            "UPDATE orders SET state = ?1, filled_qty = ?2, broker_order_id = ?3 \
+             WHERE client_order_id = ?4",
+            params![state_to_text(to), filled, broker, client_order_id],
+        )?;
+        tx.execute(
+            "INSERT INTO order_events (client_order_id, from_state, to_state, filled_qty, \
+             broker_order_id, at) VALUES (?1, ?2, ?3, ?4, ?5, ?6)",
+            params![
+                client_order_id,
+                state_to_text(from),
+                state_to_text(to),
+                filled,
+                broker,
+                time_to_text(at),
+            ],
+        )?;
+        tx.commit()?;
+        Ok(())
     }
 
     /// The order with this client order id, if stored.
