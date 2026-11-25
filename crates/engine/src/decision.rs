@@ -8,7 +8,7 @@ use pt_core::signal::{RiskEstimates, SignalSet};
 use pt_core::types::{OrderIntent, Positions, Symbol, Weights};
 use pt_portfolio::orders::{plan_orders, target_shares};
 use pt_portfolio::weights::{target_weights, SizingParams};
-use pt_risk::pretrade::{Rejection, RiskLimits};
+use pt_risk::pretrade::{check_orders, Rejection, RiskLimits};
 use pt_strategy::estimate::VolParams;
 use rust_decimal::prelude::ToPrimitive;
 use rust_decimal::Decimal;
@@ -84,13 +84,20 @@ pub fn decide_with(
 ) -> Result<Decision, EngineError> {
     let weights = target_weights(&signals.signals, &risk, &inputs.shortable, &p.sizing);
     let target = target_shares(&weights, inputs.equity, ref_prices)?;
-    let orders = plan_orders(&inputs.positions, &target, ref_prices)?;
+    let planned = plan_orders(&inputs.positions, &target, ref_prices)?;
+    let gate = check_orders(
+        &planned,
+        &inputs.positions,
+        inputs.equity,
+        ref_prices,
+        &p.limits,
+    );
     Ok(Decision {
         signals,
         risk,
         weights,
         target,
-        orders,
-        rejected: Vec::new(),
+        orders: gate.approved,
+        rejected: gate.rejected,
     })
 }
