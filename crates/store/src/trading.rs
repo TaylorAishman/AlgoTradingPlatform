@@ -558,3 +558,57 @@ impl Store {
             .fold(Decimal::ZERO, |acc, e| acc + e.cash_delta))
     }
 }
+
+/// One day's valuation of a book.
+#[derive(Debug, Clone, PartialEq)]
+pub struct EquitySnapshot {
+    pub book: Book,
+    pub date: NaiveDate,
+    pub cash: Decimal,
+    pub positions_value: Decimal,
+    pub equity: Decimal,
+    pub recorded_at: DateTime<Utc>,
+}
+
+impl Store {
+    /// Stores a snapshot, replacing the values of an existing one for the same
+    /// book and date while keeping its first `recorded_at`.
+    pub fn put_equity_snapshot(&self, s: &EquitySnapshot) -> Result<(), StoreError> {
+        self.conn.execute(
+            "INSERT INTO equity_snapshots (book, date, cash, positions_value, equity, \
+             recorded_at) VALUES (?1, ?2, ?3, ?4, ?5, ?6) \
+             ON CONFLICT (book, date) DO UPDATE SET cash = excluded.cash, \
+             positions_value = excluded.positions_value, equity = excluded.equity",
+            params![
+                s.book.as_text(),
+                date_to_text(s.date),
+                dec_to_text(s.cash),
+                dec_to_text(s.positions_value),
+                dec_to_text(s.equity),
+                time_to_text(s.recorded_at),
+            ],
+        )?;
+        Ok(())
+    }
+
+    /// The snapshots of one book in date order.
+    pub fn equity_series(&self, book: Book) -> Result<Vec<EquitySnapshot>, StoreError> {
+        let mut stmt = self.conn.prepare(
+            "SELECT date, cash, positions_value, equity, recorded_at \
+             FROM equity_snapshots WHERE book = ?1 ORDER BY date",
+        )?;
+        let mut rows = stmt.query(params![book.as_text()])?;
+        let mut out = Vec::new();
+        while let Some(r) = rows.next()? {
+            out.push(EquitySnapshot {
+                book,
+                date: text_to_date(&r.get::<_, String>(0)?)?,
+                cash: text_to_dec(&r.get::<_, String>(1)?)?,
+                positions_value: text_to_dec(&r.get::<_, String>(2)?)?,
+                equity: text_to_dec(&r.get::<_, String>(3)?)?,
+                recorded_at: text_to_time(&r.get::<_, String>(4)?)?,
+            });
+        }
+        Ok(out)
+    }
+}
