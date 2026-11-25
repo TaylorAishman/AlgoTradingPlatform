@@ -6,10 +6,12 @@ use std::collections::{BTreeMap, BTreeSet};
 use pt_config::config::Config;
 use pt_stats::descriptive::{kurtosis, returns_from_equity, skewness, std_sample};
 use pt_stats::dsr::{deflated_sharpe, expected_max_sharpe};
+use pt_stats::ols::{ols, Ols};
 use pt_stats::pbo::{pbo_cscv, PboResult};
-use pt_stats::perf::sharpe;
+use pt_stats::perf::{annualized_sharpe, sharpe};
 use pt_store::db::Store;
 use rust_decimal::prelude::ToPrimitive;
+use rust_decimal::Decimal;
 
 use crate::error::ValidateError;
 use crate::runner::{excess_returns, risk_free_closes};
@@ -104,4 +106,69 @@ pub fn pbo_for_runs(store: &Store, run_ids: &[i64], s: usize) -> Result<PboResul
         .map(|r| columns.iter().map(|c| c[r]).collect())
         .collect();
     Ok(pbo_cscv(&matrix, s)?)
+}
+
+/// A strategy run set against a benchmark run over the dates they share.
+#[derive(Debug, Clone, PartialEq)]
+pub struct BenchmarkReport {
+    pub strategy_sharpe: f64,
+    pub benchmark_sharpe: f64,
+    /// Regression of the strategy's daily returns on the benchmark's.
+    pub ols: Ols,
+}
+
+/// Compare stored run `run_id` with `benchmark_run_id` on the dates both have equity for.
+/// Each Sharpe is annualised on the run's daily returns minus the risk-free symbol's,
+/// aligned by date; the regression is on the plain daily returns.
+pub fn compare_to_benchmark(
+    store: &Store,
+    cfg: &Config,
+    run_id: i64,
+    benchmark_run_id: i64,
+    periods_per_year: f64,
+) -> Result<BenchmarkReport, ValidateError> {
+    let strat = store.backtest_equity(run_id)?;
+    let bench = store.backtest_equity(benchmark_run_id)?;
+    let in_bench: BTreeSet<chrono::NaiveDate> = bench.iter().map(|(d, _)| *d).collect();
+    let shared: BTreeSet<chrono::NaiveDate> = strat
+        .iter()
+        .map(|(d, _)| *d)
+        .filter(|d| in_bench.contains(d))
+        .collect();
+    let (first, last) = match (shared.first(), shared.last()) {
+        (Some(f), Some(l)) => (*f, *l),
+        _ => {
+            return Err(ValidateError::Invalid(format!(
+                "runs {run_id} and {benchmark_run_id} share no dates"
+            )))
+        }
+    };
+    let restrict = |eq: Vec<(chrono::NaiveDate, Decimal)>| -> Vec<(chrono::NaiveDate, Decimal)> {
+        let mut v: Vec<_> = eq.into_iter().filter(|(d, _)| shared.contains(d)).collect();
+        v.sort_by_key(|(d, _)| *d);
+        v
+    };
+    let (strat, bench) = (restrict(strat), restrict(bench));
+    let closes = risk_free_closes(store, cfg, first, last)?;
+    let rf = &cfg.strategy.risk_free_symbol;
+    let strategy_sharpe =
+        annualized_sharpe(&excess_returns(&strat, rf, &closes)?, periods_per_year);
+    let benchmark_sharpe =
+        annualized_sharpe(&excess_returns(&bench, rf, &closes)?, periods_per_year);
+    let plain = |eq: &[(chrono::NaiveDate, Decimal)]| -> Result<Vec<f64>, ValidateError> {
+        let v = eq
+            .iter()
+            .map(|(_, e)| {
+                e.to_f64()
+                    .ok_or_else(|| ValidateError::Invalid(format!("{e} does not fit in f64")))
+            })
+            .collect::<Result<Vec<_>, _>>()?;
+        Ok(returns_from_equity(&v))
+    };
+    let ols = ols(&plain(&strat)?, &plain(&bench)?)?;
+    Ok(BenchmarkReport {
+        strategy_sharpe,
+        benchmark_sharpe,
+        ols,
+    })
 }
