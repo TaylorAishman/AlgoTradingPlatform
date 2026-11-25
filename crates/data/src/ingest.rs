@@ -10,6 +10,7 @@ use pt_store::db::Store;
 use pt_store::market::{BarRow, UpsertStats};
 
 use crate::error::DataError;
+use crate::quality::check_bar;
 
 /// What one ingest stored for each series, and whether every symbol has a
 /// raw and an adjusted bar for the `through` session.
@@ -121,6 +122,7 @@ fn fetch(
     )?;
     wire.iter()
         .map(|w| {
+            check_bar(w)?;
             Ok(BarRow {
                 bar: to_bar(w)?,
                 adjustment,
