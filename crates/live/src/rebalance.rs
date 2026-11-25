@@ -6,19 +6,25 @@
 
 use std::collections::BTreeSet;
 
+use chrono::NaiveDate;
+
 use pt_alpaca::reference::WireClock;
 use pt_calendar::schedule::monthly_schedule;
 use pt_config::hash::config_hash;
 use pt_core::money::Money;
-use pt_core::types::{PriceBasis, Symbol};
+use pt_core::order_state::OrderState;
+use pt_core::types::{PriceBasis, Side, Symbol};
 use pt_data::view::StoreView;
 use pt_engine::decision::{
     decide, decision_to_json, params_from_config, record_to_json, DecisionInputs, DecisionRecord,
 };
-use pt_store::trading::{Book, DecisionRow, Mode};
+use pt_store::error::StoreError;
+use pt_store::trading::{Book, DecisionRow, Mode, OrderRow};
+use rust_decimal::Decimal;
 
 use crate::context::LiveContext;
 use crate::error::LiveError;
+use crate::ids::client_order_id;
 use crate::snapshot::trade_session;
 
 /// What one call of [`rebalance`] did.
@@ -39,6 +45,19 @@ pub fn rebalance(ctx: &LiveContext, wire_clock: &WireClock) -> Result<RebalanceO
     let Some(due) = monthly_schedule(&calendar, ctx.cfg.data.start, trade_date).pop() else {
         return Ok(RebalanceOutcome::NotDue);
     };
+    if let Some(existing) =
+        ctx.store
+            .decision_for(ctx.strategy.id(), due.signal_date, Mode::Paper)?
+    {
+        // A run may have stopped between recording the decision and writing all
+        // of its orders; write any that are missing from the stored decision.
+        let trade_date = existing.trade_date.ok_or_else(|| {
+            LiveError::Invalid(format!("decision {} has no trade date", existing.id))
+        })?;
+        let orders = stored_orders(&existing.outputs_json)?;
+        write_orders(ctx, existing.id, due.signal_date, trade_date, &orders)?;
+        return Ok(RebalanceOutcome::NotDue);
+    }
     let ref_date = calendar
         .prev_session(trade_date)
         .ok_or_else(|| LiveError::Invalid(format!("no session before trade date {trade_date}")))?;
@@ -107,10 +126,96 @@ pub fn rebalance(ctx: &LiveContext, wire_clock: &WireClock) -> Result<RebalanceO
         outputs_json: decision_to_json(&decision),
         created_at: now,
     })?;
+    let orders: Vec<PlannedOrder> = decision
+        .orders
+        .iter()
+        .map(|o| PlannedOrder {
+            symbol: o.symbol.clone(),
+            side: o.side,
+            qty: o.qty,
+            reference_price: o.reference_price.value(),
+        })
+        .collect();
+    write_orders(ctx, decision_id, due.signal_date, trade_date, &orders)?;
     Ok(RebalanceOutcome::Recorded {
         decision_id,
         orders: decision.orders.len(),
     })
+}
+
+/// One planned order as stored in a decision's outputs.
+struct PlannedOrder {
+    symbol: Symbol,
+    side: Side,
+    qty: u64,
+    reference_price: Decimal,
+}
+
+/// Writes each planned order as an Intent row of the decision. The store has
+/// no transaction spanning calls, so each order is its own atomic write; an
+/// order whose deterministic client order id is already stored counts as
+/// written, so a rerun after a partial write completes the set without
+/// duplicating any order.
+fn write_orders(
+    ctx: &LiveContext,
+    decision_id: i64,
+    signal_date: NaiveDate,
+    trade_date: NaiveDate,
+    orders: &[PlannedOrder],
+) -> Result<(), LiveError> {
+    for o in orders {
+        let res = ctx.store.insert_order(&OrderRow {
+            client_order_id: client_order_id(ctx.strategy.id(), signal_date, o.symbol.as_str(), 1),
+            decision_id: Some(decision_id),
+            symbol: o.symbol.clone(),
+            side: o.side,
+            qty: o.qty,
+            leg: 1,
+            state: OrderState::Intent,
+            broker_order_id: None,
+            filled_qty: 0,
+            reference_price: o.reference_price,
+            trade_date,
+        });
+        match res {
+            Ok(()) | Err(StoreError::Duplicate(_)) => {}
+            Err(e) => return Err(e.into()),
+        }
+    }
+    Ok(())
+}
+
+/// The planned orders of a stored decision's `outputs_json` (its `orders` array).
+fn stored_orders(outputs_json: &str) -> Result<Vec<PlannedOrder>, LiveError> {
+    let bad = |what: &str| LiveError::Invalid(format!("stored decision orders: {what}"));
+    let v: serde_json::Value =
+        serde_json::from_str(outputs_json).map_err(|e| bad(&e.to_string()))?;
+    let list = v
+        .get("orders")
+        .and_then(serde_json::Value::as_array)
+        .ok_or_else(|| bad("no orders array"))?;
+    list.iter()
+        .map(|o| {
+            let field = |k: &str| o.get(k).ok_or_else(|| bad(&format!("missing {k}")));
+            let sym = field("symbol")?.as_str().ok_or_else(|| bad("symbol"))?;
+            let side = match field("side")?.as_str() {
+                Some("buy") => Side::Buy,
+                Some("sell") => Side::Sell,
+                _ => return Err(bad("side")),
+            };
+            let qty = field("qty")?.as_u64().ok_or_else(|| bad("qty"))?;
+            let reference_price = field("reference_price")?
+                .as_str()
+                .and_then(|p| p.parse::<Decimal>().ok())
+                .ok_or_else(|| bad("reference_price"))?;
+            Ok(PlannedOrder {
+                symbol: symbol(sym)?,
+                side,
+                qty,
+                reference_price,
+            })
+        })
+        .collect()
 }
 
 fn symbol(s: &str) -> Result<Symbol, LiveError> {
