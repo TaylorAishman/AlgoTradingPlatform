@@ -5,6 +5,7 @@ use std::path::Path;
 use anyhow::{anyhow, Context};
 use pt_core::types::Adjustment;
 use pt_data::csv_import::{import_bars_csv, import_calendar_csv};
+use pt_data::quality::check_gaps;
 use pt_store::db::Store;
 
 use crate::cli::DataCmd;
@@ -51,6 +52,34 @@ pub fn data(action: &DataCmd) -> anyhow::Result<i32> {
             println!("imported {n} bars");
             Ok(0)
         }
+        DataCmd::Check => check(),
         _ => anyhow::bail!("`data` is not implemented yet"),
     }
+}
+
+/// List every session missing from the stored raw bars of each universe
+/// symbol and the risk-free symbol, up to the last stored session on or before
+/// today, as `SYMBOL DATE` lines. Exits 1 when there is any (R-126, R-383).
+fn check() -> anyhow::Result<i32> {
+    let cfg = wiring::load_config()?;
+    let store = open_store()?;
+    let calendar = store.calendar().context("reading the calendar")?;
+    let today = chrono::Utc::now().date_naive();
+    let Some(through) = calendar
+        .sessions_between(chrono::NaiveDate::MIN, today)
+        .last()
+        .copied()
+    else {
+        println!("no gaps");
+        return Ok(0);
+    };
+    let gaps = check_gaps(&store, &cfg, through)?;
+    if gaps.is_empty() {
+        println!("no gaps");
+        return Ok(0);
+    }
+    for gap in &gaps {
+        println!("{} {}", gap.symbol, gap.date.format("%Y-%m-%d"));
+    }
+    Ok(1)
 }
