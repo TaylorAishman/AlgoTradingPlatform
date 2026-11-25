@@ -171,3 +171,17 @@ fn data_ingest() -> anyhow::Result<i32> {
     println!("through {through}");
     Ok(0)
 }
+
+/// Run the smoke test and print `CHECK PASS|FAIL detail` per check. Exits 1 if
+/// any check fails (R-387).
+pub fn doctor() -> anyhow::Result<i32> {
+    let cfg = wiring::load_config()?;
+    let http = wiring::build_client()?;
+    let mut failed = false;
+    for l in pt_data::doctor::doctor(&http, &cfg) {
+        let status = if l.pass { "PASS" } else { "FAIL" };
+        failed |= !l.pass;
+        println!("{} {} {}", l.check, status, l.detail);
+    }
+    Ok(i32::from(failed))
+}

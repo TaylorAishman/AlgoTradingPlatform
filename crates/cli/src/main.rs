@@ -58,7 +58,7 @@ fn dispatch(cli: &Cli) -> anyhow::Result<i32> {
         Command::Calendar { action } => cmd_config::calendar(action),
         Command::Data { action } => cmd_data::data(action),
         Command::Universe { action } => cmd_config::universe(action),
-        Command::Doctor => cmd_run::doctor(),
+        Command::Doctor => cmd_data::doctor(),
         Command::Backtest { action } => cmd_backtest::backtest(action),
         Command::Validate { action } => cmd_validate::validate(action),
         Command::Run => cmd_run::run(),
