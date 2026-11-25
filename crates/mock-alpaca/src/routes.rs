@@ -124,7 +124,10 @@ pub fn respond(req: &Recorded, state: &mut State) -> (u16, String) {
                 let list: Vec<_> = state
                     .positions
                     .iter()
-                    .map(|(sym, q)| json!({"symbol": sym, "qty": fmt_dec(*q)}))
+                    .map(|(sym, q)| {
+                        let side = if *q >= 0 { "long" } else { "short" };
+                        json!({"symbol": sym, "qty": fmt_dec(*q), "side": side})
+                    })
                     .collect();
                 return (200, serde_json::Value::Array(list).to_string());
             }
