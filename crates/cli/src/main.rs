@@ -45,7 +45,7 @@ fn minimum_stage(command: &Command) -> Option<(&'static str, Stage)> {
 fn dispatch(cli: &Cli) -> anyhow::Result<i32> {
     if let Some((name, required)) = minimum_stage(&cli.command) {
         if let Some(message) = wiring::stage_refusal(name, required)? {
-            eprintln!("error: {message}");
+            wiring::log("error", &message);
             return Ok(EXIT_STAGE_FORBIDS);
         }
         // Every command with a minimum stage talks to the network. The client is
@@ -76,7 +76,7 @@ fn main() -> ExitCode {
     match dispatch(&cli) {
         Ok(code) => ExitCode::from(u8::try_from(code).unwrap_or(1)),
         Err(err) => {
-            eprintln!("error: {err:#}");
+            wiring::log("error", &format!("{err:#}"));
             ExitCode::from(1)
         }
     }

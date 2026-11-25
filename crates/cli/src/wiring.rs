@@ -153,3 +153,13 @@ pub fn build_client() -> anyhow::Result<HttpClient> {
     );
     Ok(HttpClient::new(endpoints, creds, limiter, sleeper))
 }
+
+/// Write one JSON log line to stderr. Stdout is kept for command results.
+pub fn log(level: &str, message: &str) {
+    let line = serde_json::json!({
+        "ts": chrono::Utc::now().to_rfc3339(),
+        "level": level,
+        "message": message,
+    });
+    eprintln!("{line}");
+}
