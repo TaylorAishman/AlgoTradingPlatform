@@ -3,6 +3,7 @@
 
 use crate::error::ShadowError;
 use pt_config::config::Config;
+use pt_config::hash::config_hash;
 use pt_core::types::{PriceBasis, Symbol};
 use pt_data::view::StoreView;
 use pt_engine::decision::{decide, decision_to_json, params_from_config, record_from_json};
@@ -30,6 +31,32 @@ fn find_decision(store: &Store, decision_id: i64) -> Result<DecisionRow, ShadowE
         }
     }
     Err(ShadowError::NotFound(format!("decision {decision_id}")))
+}
+
+/// Names each top-level section of the outputs that differs, with both values.
+fn output_diffs(stored: &str, replayed: &str) -> Vec<String> {
+    let parse = |t: &str| serde_json::from_str::<serde_json::Value>(t).ok();
+    let (Some(a), Some(b)) = (parse(stored), parse(replayed)) else {
+        return vec!["outputs: stored outputs differ from the replay".to_string()];
+    };
+    let (Some(a), Some(b)) = (a.as_object(), b.as_object()) else {
+        return vec!["outputs: stored outputs differ from the replay".to_string()];
+    };
+    let keys: BTreeSet<&String> = a.keys().chain(b.keys()).collect();
+    let mut out = Vec::new();
+    for k in keys {
+        if a.get(k) != b.get(k) {
+            out.push(format!(
+                "{k}: stored {} but replayed {}",
+                a.get(k).map_or("<absent>".to_string(), |v| v.to_string()),
+                b.get(k).map_or("<absent>".to_string(), |v| v.to_string())
+            ));
+        }
+    }
+    if out.is_empty() {
+        out.push("outputs: stored outputs differ from the replay".to_string());
+    }
+    out
 }
 
 /// Recomputes decision `decision_id` from its stored record, over the bars of
@@ -65,8 +92,15 @@ pub fn replay_decision(
     let replayed = decision_to_json(&decision);
 
     let mut diffs = Vec::new();
+    let current_hash = config_hash(cfg);
+    if record.config_hash != current_hash {
+        diffs.push(format!(
+            "config_hash: stored {} but current {}",
+            record.config_hash, current_hash
+        ));
+    }
     if replayed != row.outputs_json {
-        diffs.push("outputs".to_string());
+        diffs.extend(output_diffs(&row.outputs_json, &replayed));
     }
     Ok(ReplayResult {
         decision_id,
