@@ -10,7 +10,7 @@ use pt_core::money::{Money, Price};
 use pt_core::types::{Fill, OrderIntent, Symbol, Weights};
 use pt_core::view::MarketView;
 use pt_portfolio::orders::{plan_orders, target_shares};
-use pt_risk::halts::HaltReason;
+use pt_risk::halts::{check_equity, HaltReason};
 use pt_risk::pretrade::{check_orders, Rejection, RiskLimits};
 use rust_decimal::Decimal;
 
@@ -100,6 +100,7 @@ pub fn simulate(
         borrow_total: Decimal::ZERO,
         traded_notional: Decimal::ZERO,
     };
+    let mut series: Vec<Decimal> = Vec::new();
     for &date in cal.sessions_between(cfg.start, cfg.end) {
         if let Some(w) = weights.get(&date) {
             let equity = result
@@ -134,6 +135,11 @@ pub fn simulate(
         result.borrow_total += borrow;
         let equity = book.equity(&closes)?;
         result.equity.push((date, equity));
+        // Recorded only: trading continues after a halt.
+        series.push(equity);
+        if let Some(reason) = check_equity(&series, &cfg.limits) {
+            result.would_halt.push((date, reason));
+        }
     }
     Ok(result)
 }
