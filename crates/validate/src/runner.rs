@@ -1,7 +1,7 @@
 //! Backtest runner: the request, the trial hash that identifies a trial, and the
 //! research run that is stored.
 
-use std::collections::BTreeSet;
+use std::collections::{BTreeMap, BTreeSet};
 use std::fmt::Write as _;
 use std::sync::Arc;
 
@@ -10,15 +10,18 @@ use pt_calendar::schedule::monthly_schedule;
 use pt_config::config::Config;
 use pt_config::hash::config_hash;
 use pt_core::clock::Clock;
-use pt_core::types::{PriceBasis, Symbol};
+use pt_core::types::{Adjustment, PriceBasis, Symbol};
 use pt_data::view::StoreView;
 use pt_engine::decision::params_from_config;
 use pt_engine::schedule::run_backtest;
 use pt_engine::simulate::{SimConfig, SimResult};
+use pt_stats::descriptive::returns_from_equity;
+use pt_stats::perf::{annualized_sharpe, annualized_vol, cagr, max_drawdown};
 use pt_store::db::Store;
 use pt_strategy::benchmark::LongOnly;
 use pt_strategy::strategy::Strategy;
 use pt_strategy::tsmom::{Tsmom, TsmomParams};
+use rust_decimal::prelude::ToPrimitive;
 use rust_decimal::Decimal;
 use sha2::{Digest, Sha256};
 
@@ -115,19 +118,60 @@ pub struct Metrics {
     pub n_obs: usize,
 }
 
+const PERIODS_PER_YEAR: f64 = 252.0;
+
+fn to_f64(d: Decimal) -> Result<f64, ValidateError> {
+    d.to_f64()
+        .ok_or_else(|| ValidateError::Invalid(format!("{d} does not fit in f64")))
+}
+
 impl Metrics {
-    /// The metrics of `result`. Only the totals and the count are filled in for now.
-    fn from_result(result: &SimResult) -> Metrics {
-        Metrics {
-            sharpe: 0.0,
-            cagr: 0.0,
-            vol: 0.0,
-            max_drawdown: 0.0,
-            turnover: 0.0,
+    /// The metrics of `result`. `rf_closes` are the closes of the risk-free instrument
+    /// `rf_symbol` by date; they are aligned to the equity dates, and a missing close is an
+    /// error. Sharpe is taken on the excess return.
+    fn from_result(
+        result: &SimResult,
+        rf_symbol: &str,
+        rf_closes: &BTreeMap<NaiveDate, f64>,
+    ) -> Result<Metrics, ValidateError> {
+        let equity = result
+            .equity
+            .iter()
+            .map(|(_, e)| to_f64(*e))
+            .collect::<Result<Vec<_>, _>>()?;
+        let rets = returns_from_equity(&equity);
+        let rf = result
+            .equity
+            .iter()
+            .map(|(d, _)| {
+                rf_closes
+                    .get(d)
+                    .copied()
+                    .ok_or_else(|| ValidateError::Invalid(format!("no {rf_symbol} close on {d}")))
+            })
+            .collect::<Result<Vec<_>, _>>()?;
+        let excess: Vec<f64> = rets
+            .iter()
+            .zip(returns_from_equity(&rf))
+            .map(|(r, b)| r - b)
+            .collect();
+        let turnover = if equity.is_empty() || rets.is_empty() {
+            0.0
+        } else {
+            let mean_eq = equity.iter().sum::<f64>() / equity.len() as f64;
+            let years = rets.len() as f64 / PERIODS_PER_YEAR;
+            to_f64(result.traded_notional)? / mean_eq / years
+        };
+        Ok(Metrics {
+            sharpe: annualized_sharpe(&excess, PERIODS_PER_YEAR),
+            cagr: cagr(&equity, PERIODS_PER_YEAR),
+            vol: annualized_vol(&rets, PERIODS_PER_YEAR),
+            max_drawdown: max_drawdown(&equity),
+            turnover,
             cost_total: result.cost_total,
             borrow_total: result.borrow_total,
-            n_obs: result.equity.len().saturating_sub(1),
-        }
+            n_obs: rets.len(),
+        })
     }
 }
 
@@ -165,6 +209,7 @@ pub fn run_and_record(
         .map(|(_, s)| s.clone())
         .collect();
     let risk_free = symbol(&cfg.strategy.risk_free_symbol)?;
+    let rf_sym = risk_free.clone();
 
     let strategy: Box<dyn Strategy> = match req.strategy.as_str() {
         "tsmom" => Box::new(Tsmom::new(
@@ -207,6 +252,20 @@ pub fn run_and_record(
         &params,
     )?;
 
+    let rf_closes = store
+        .bars_asof(
+            &rf_sym,
+            Adjustment::All,
+            &cfg.data.feed,
+            req.from,
+            req.to,
+            None,
+        )?
+        .iter()
+        .map(|b| Ok((b.date, to_f64(b.close.value())?)))
+        .collect::<Result<BTreeMap<_, _>, ValidateError>>()?;
+    let metrics = Metrics::from_result(&result, rf_sym.as_str(), &rf_closes)?;
+
     let hash = trial_hash(cfg, req, &strategy.params_canonical());
     let run_id = store.save_backtest(
         strategy.id(),
@@ -218,7 +277,7 @@ pub fn run_and_record(
     Ok(BacktestOutcome {
         run_id,
         trial_hash: hash,
-        metrics: Metrics::from_result(&result),
+        metrics,
         result,
     })
 }
