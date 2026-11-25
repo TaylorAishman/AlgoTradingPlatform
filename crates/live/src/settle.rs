@@ -43,6 +43,7 @@ pub fn settle(ctx: &LiveContext) -> Result<SettleReport, LiveError> {
     let open = [OrderState::Submitted, OrderState::PartiallyFilled];
     let rows = ctx.store.orders_in_states(&open)?;
     let Some(earliest) = rows.iter().map(|r| r.trade_date).min() else {
+        abandon_legs(ctx)?;
         report.legs_released = released_legs(ctx)?;
         return Ok(report);
     };
@@ -102,8 +103,56 @@ pub fn settle(ctx: &LiveContext) -> Result<SettleReport, LiveError> {
         )?;
         report.orders_updated += 1;
     }
+    abandon_legs(ctx)?;
     report.legs_released = released_legs(ctx)?;
     Ok(report)
+}
+
+/// Moves each leg-2 intent whose leg 1 (same decision and symbol) ended
+/// unfilled (`Expired`, `Canceled` or `Rejected` with nothing filled) to
+/// `Abandoned`, with an `order_abandoned` alert recorded first so a crash
+/// between the two repeats the alert rather than losing it.
+fn abandon_legs(ctx: &LiveContext) -> Result<(), LiveError> {
+    let ended = [
+        OrderState::Expired,
+        OrderState::Canceled,
+        OrderState::Rejected,
+    ];
+    let dead: Vec<OrderRow> = ctx
+        .store
+        .orders_in_states(&ended)?
+        .into_iter()
+        .filter(|o| o.filled_qty == 0)
+        .collect();
+    for o in ctx.store.orders_in_states(&[OrderState::Intent])? {
+        if o.leg != 2 || o.decision_id.is_none() {
+            continue;
+        }
+        let Some(leg1) = dead
+            .iter()
+            .find(|d| d.leg == 1 && d.decision_id == o.decision_id && d.symbol == o.symbol)
+        else {
+            continue;
+        };
+        ctx.store.record_alert(
+            "warn",
+            "order_abandoned",
+            &format!(
+                "{} order {} abandoned: leg 1 {} ended {:?} unfilled",
+                o.symbol, o.client_order_id, leg1.client_order_id, leg1.state
+            ),
+            false,
+            ctx.clock.now_utc(),
+        )?;
+        ctx.store.set_order_state(
+            &o.client_order_id,
+            OrderState::Abandoned,
+            0,
+            None,
+            ctx.clock.now_utc(),
+        )?;
+    }
+    Ok(())
 }
 
 /// Counts the leg-2 intents whose leg 1 (same decision and symbol) is `Filled`.
