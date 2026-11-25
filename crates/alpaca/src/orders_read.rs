@@ -86,7 +86,7 @@ pub fn orders_since(
     }
 }
 
-fn parse_order(body: &str) -> Result<WireOrder, AlpacaError> {
+pub(crate) fn parse_order(body: &str) -> Result<WireOrder, AlpacaError> {
     let v: serde_json::Value =
         serde_json::from_str(body).map_err(|e| AlpacaError::Parse(e.to_string()))?;
     parse_order_value(&v)
