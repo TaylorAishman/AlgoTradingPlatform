@@ -2,7 +2,7 @@
 
 use chrono::{DateTime, NaiveDate, NaiveTime, SecondsFormat, Utc};
 use pt_core::order_state::{transition_allowed, OrderState};
-use pt_core::types::{Side, Symbol};
+use pt_core::types::{Positions, Side, Symbol};
 use rusqlite::{params, params_from_iter, Row, Transaction, TransactionBehavior};
 use rust_decimal::Decimal;
 
@@ -437,5 +437,103 @@ impl Store {
             });
         }
         Ok(out)
+    }
+}
+
+/// Which ledger an entry belongs to.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum Book {
+    Paper,
+    Shadow,
+}
+
+impl Book {
+    fn as_text(self) -> &'static str {
+        match self {
+            Book::Paper => "paper",
+            Book::Shadow => "shadow",
+        }
+    }
+}
+
+/// One cash and position movement in a book.
+#[derive(Debug, Clone, PartialEq)]
+pub struct LedgerEntry {
+    pub book: Book,
+    pub date: NaiveDate,
+    pub kind: String,
+    pub symbol: Option<Symbol>,
+    pub qty: i64,
+    pub price: Option<Decimal>,
+    pub cash_delta: Decimal,
+    pub ref_id: Option<String>,
+}
+
+impl Store {
+    /// Appends a ledger entry and returns its id. Ids increase with insertion.
+    pub fn append_ledger(&self, e: &LedgerEntry) -> Result<i64, StoreError> {
+        self.conn.execute(
+            "INSERT INTO ledger_entries (book, date, kind, symbol, qty, price, cash_delta, \
+             ref_id) VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8)",
+            params![
+                e.book.as_text(),
+                date_to_text(e.date),
+                e.kind,
+                e.symbol.as_ref().map(Symbol::as_str),
+                e.qty,
+                e.price.map(dec_to_text),
+                dec_to_text(e.cash_delta),
+                e.ref_id,
+            ],
+        )?;
+        Ok(self.conn.last_insert_rowid())
+    }
+
+    /// The entries of one book, in insertion order.
+    pub fn ledger(&self, book: Book) -> Result<Vec<LedgerEntry>, StoreError> {
+        let mut stmt = self.conn.prepare(
+            "SELECT date, kind, symbol, qty, price, cash_delta, ref_id \
+             FROM ledger_entries WHERE book = ?1 ORDER BY id",
+        )?;
+        let mut rows = stmt.query(params![book.as_text()])?;
+        let mut out = Vec::new();
+        while let Some(r) = rows.next()? {
+            let symbol: Option<String> = r.get(2)?;
+            let price: Option<String> = r.get(4)?;
+            out.push(LedgerEntry {
+                book,
+                date: text_to_date(&r.get::<_, String>(0)?)?,
+                kind: r.get(1)?,
+                symbol: symbol
+                    .map(|s| Symbol::new(&s))
+                    .transpose()
+                    .map_err(|e| StoreError::Codec(format!("invalid symbol: {e}")))?,
+                qty: r.get(3)?,
+                price: price.map(|p| text_to_dec(&p)).transpose()?,
+                cash_delta: text_to_dec(&r.get::<_, String>(5)?)?,
+                ref_id: r.get(6)?,
+            });
+        }
+        Ok(out)
+    }
+
+    /// Net quantity per symbol in a book; symbols with a net of zero are absent.
+    pub fn positions(&self, book: Book) -> Result<Positions, StoreError> {
+        let mut out = Positions::new();
+        for e in self.ledger(book)? {
+            if let Some(s) = e.symbol {
+                *out.entry(s).or_insert(0) += e.qty;
+            }
+        }
+        out.retain(|_, q| *q != 0);
+        Ok(out)
+    }
+
+    /// The sum of the cash deltas in a book; zero when it has no entries.
+    pub fn cash(&self, book: Book) -> Result<Decimal, StoreError> {
+        Ok(self
+            .ledger(book)?
+            .iter()
+            .fold(Decimal::ZERO, |acc, e| acc + e.cash_delta))
     }
 }
