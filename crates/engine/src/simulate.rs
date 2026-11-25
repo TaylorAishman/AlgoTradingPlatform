@@ -10,7 +10,7 @@ use pt_core::money::{Money, Price};
 use pt_core::types::{Fill, OrderIntent, Symbol, Weights};
 use pt_core::view::MarketView;
 use pt_portfolio::orders::{plan_orders, target_shares};
-use pt_risk::halts::HaltReason;
+use pt_risk::halts::{check_equity, HaltReason};
 use pt_risk::pretrade::{check_orders, Rejection, RiskLimits};
 use rust_decimal::Decimal;
 
@@ -64,6 +64,31 @@ pub fn simulate(
     view: &dyn MarketView,
     cal: &TradingCalendar,
 ) -> Result<SimResult, EngineError> {
+    if !cal.is_session(cfg.start) {
+        return Err(EngineError::Invalid(format!(
+            "start {} is not a session",
+            cfg.start
+        )));
+    }
+    if !cal.is_session(cfg.end) && cal.next_session(cfg.end).is_none() {
+        return Err(EngineError::Invalid(format!(
+            "end {} is beyond the last session",
+            cfg.end
+        )));
+    }
+    for &date in weights.keys() {
+        if !cal.is_session(date) {
+            return Err(EngineError::Invalid(format!(
+                "weights date {date} is not a session"
+            )));
+        }
+        if date < cfg.start || date > cfg.end {
+            return Err(EngineError::Invalid(format!(
+                "weights date {date} is outside {} to {}",
+                cfg.start, cfg.end
+            )));
+        }
+    }
     let broker = SimBroker::new(cfg.cost);
     let mut book = Book::new(cfg.initial_capital);
     let mut result = SimResult {
@@ -75,6 +100,7 @@ pub fn simulate(
         borrow_total: Decimal::ZERO,
         traded_notional: Decimal::ZERO,
     };
+    let mut series: Vec<Decimal> = Vec::new();
     for &date in cal.sessions_between(cfg.start, cfg.end) {
         if let Some(w) = weights.get(&date) {
             let equity = result
@@ -109,6 +135,11 @@ pub fn simulate(
         result.borrow_total += borrow;
         let equity = book.equity(&closes)?;
         result.equity.push((date, equity));
+        // Recorded only: trading continues after a halt.
+        series.push(equity);
+        if let Some(reason) = check_equity(&series, &cfg.limits) {
+            result.would_halt.push((date, reason));
+        }
     }
     Ok(result)
 }
