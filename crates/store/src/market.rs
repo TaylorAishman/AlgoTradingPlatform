@@ -27,6 +27,15 @@ pub struct UpsertStats {
     pub restated: usize,
 }
 
+/// The broker's flags for one asset, as fetched at some instant.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct AssetSnapshot {
+    pub symbol: Symbol,
+    pub tradable: bool,
+    pub shortable: bool,
+    pub easy_to_borrow: bool,
+}
+
 /// The text stored in `bars.adjustment`.
 fn adjustment_text(a: Adjustment) -> &'static str {
     match a {
@@ -238,5 +247,61 @@ impl Store {
             return Err(StoreError::NotFound("calendar sessions".to_string()));
         }
         TradingCalendar::new(dates).map_err(|e| StoreError::Codec(e.to_string()))
+    }
+
+    /// Stores an asset snapshot fetched at `fetched_at`. A snapshot for the
+    /// same symbol and instant is replaced.
+    pub fn put_asset_snapshot(
+        &self,
+        snapshot: &AssetSnapshot,
+        fetched_at: DateTime<Utc>,
+    ) -> Result<(), StoreError> {
+        self.conn.execute(
+            "INSERT OR REPLACE INTO asset_snapshots
+             (symbol, fetched_at, tradable, shortable, easy_to_borrow)
+             VALUES (?1, ?2, ?3, ?4, ?5)",
+            params![
+                snapshot.symbol.as_str(),
+                instant_text(fetched_at),
+                snapshot.tradable,
+                snapshot.shortable,
+                snapshot.easy_to_borrow,
+            ],
+        )?;
+        Ok(())
+    }
+
+    /// The latest snapshot fetched at or before `asof`, or the latest overall
+    /// when `asof` is `None`.
+    pub fn asset_asof(
+        &self,
+        symbol: &Symbol,
+        asof: Option<DateTime<Utc>>,
+    ) -> Result<Option<AssetSnapshot>, StoreError> {
+        let asof = asof.map(instant_text);
+        let found = self
+            .conn
+            .query_row(
+                "SELECT tradable, shortable, easy_to_borrow FROM asset_snapshots
+                 WHERE symbol = ?1 AND (?2 IS NULL OR fetched_at <= ?2)
+                 ORDER BY fetched_at DESC LIMIT 1",
+                params![symbol.as_str(), asof],
+                |r| {
+                    Ok((
+                        r.get::<_, bool>(0)?,
+                        r.get::<_, bool>(1)?,
+                        r.get::<_, bool>(2)?,
+                    ))
+                },
+            )
+            .optional()?;
+        Ok(
+            found.map(|(tradable, shortable, easy_to_borrow)| AssetSnapshot {
+                symbol: symbol.clone(),
+                tradable,
+                shortable,
+                easy_to_borrow,
+            }),
+        )
     }
 }
