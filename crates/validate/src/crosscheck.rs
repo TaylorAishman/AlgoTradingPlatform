@@ -109,6 +109,14 @@ pub fn crosscheck(
         &params,
     )?;
     let engine = simulate(&sim, &weights, &view, &cal)?;
+    // The vector calculator has no risk gate, so a run with rejected orders differs
+    // by construction and is not compared.
+    if let Some((date, order, why)) = engine.rejected.first() {
+        return Err(ValidateError::NotComparable(format!(
+            "the engine rejected {} order(s), the first on {date} ({order:?}: {why:?})",
+            engine.rejected.len()
+        )));
+    }
 
     let inputs = vector_inputs(req, &universe, &weights, &view, &cal, cost)?;
     let vector = vector_equity(&inputs)?;
