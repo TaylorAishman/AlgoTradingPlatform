@@ -16,8 +16,9 @@ use pt_engine::decision::params_from_config;
 use pt_engine::schedule::run_backtest;
 use pt_engine::simulate::{SimConfig, SimResult};
 use pt_stats::descriptive::returns_from_equity;
-use pt_stats::perf::{annualized_sharpe, annualized_vol, cagr, max_drawdown};
+use pt_stats::perf::{annualized_sharpe, annualized_vol, cagr, max_drawdown, sharpe};
 use pt_store::db::Store;
+use pt_store::ops::TrialRow;
 use pt_strategy::benchmark::LongOnly;
 use pt_strategy::strategy::Strategy;
 use pt_strategy::tsmom::{Tsmom, TsmomParams};
@@ -128,12 +129,12 @@ fn to_f64(d: Decimal) -> Result<f64, ValidateError> {
 impl Metrics {
     /// The metrics of `result`. `rf_closes` are the closes of the risk-free instrument
     /// `rf_symbol` by date; they are aligned to the equity dates, and a missing close is an
-    /// error. Sharpe is taken on the excess return.
+    /// error. Sharpe is taken on the excess return, which is returned with the metrics.
     fn from_result(
         result: &SimResult,
         rf_symbol: &str,
         rf_closes: &BTreeMap<NaiveDate, f64>,
-    ) -> Result<Metrics, ValidateError> {
+    ) -> Result<(Metrics, Vec<f64>), ValidateError> {
         let equity = result
             .equity
             .iter()
@@ -162,7 +163,7 @@ impl Metrics {
             let years = rets.len() as f64 / PERIODS_PER_YEAR;
             to_f64(result.traded_notional)? / mean_eq / years
         };
-        Ok(Metrics {
+        let metrics = Metrics {
             sharpe: annualized_sharpe(&excess, PERIODS_PER_YEAR),
             cagr: cagr(&equity, PERIODS_PER_YEAR),
             vol: annualized_vol(&rets, PERIODS_PER_YEAR),
@@ -171,7 +172,8 @@ impl Metrics {
             cost_total: result.cost_total,
             borrow_total: result.borrow_total,
             n_obs: rets.len(),
-        })
+        };
+        Ok((metrics, excess))
     }
 }
 
@@ -188,7 +190,8 @@ fn symbol(s: &str) -> Result<Symbol, ValidateError> {
     Symbol::new(s).map_err(|e| ValidateError::Invalid(format!("symbol {s:?}: {e}")))
 }
 
-/// Run `req` on adjusted prices with the research cost profile and store its equity.
+/// Run `req` on adjusted prices with the research cost profile, store its equity and
+/// register it as a trial.
 pub fn run_and_record(
     store: &Store,
     cfg: &Config,
@@ -264,8 +267,10 @@ pub fn run_and_record(
         .iter()
         .map(|b| Ok((b.date, to_f64(b.close.value())?)))
         .collect::<Result<BTreeMap<_, _>, ValidateError>>()?;
-    let metrics = Metrics::from_result(&result, rf_sym.as_str(), &rf_closes)?;
+    let (metrics, excess) = Metrics::from_result(&result, rf_sym.as_str(), &rf_closes)?;
 
+    let n_obs = u32::try_from(excess.len())
+        .map_err(|_| ValidateError::Invalid("too many observations".into()))?;
     let hash = trial_hash(cfg, req, &strategy.params_canonical());
     let run_id = store.save_backtest(
         strategy.id(),
@@ -274,6 +279,14 @@ pub fn run_and_record(
         &result.equity,
         clock.now_utc(),
     )?;
+    // A repeat of the same family and hash counts as another run, not another trial.
+    store.register_trial(&TrialRow {
+        family: strategy.id().to_string(),
+        trial_hash: hash.clone(),
+        sharpe: sharpe(&excess),
+        n_obs,
+        runs: 1,
+    })?;
     Ok(BacktestOutcome {
         run_id,
         trial_hash: hash,
