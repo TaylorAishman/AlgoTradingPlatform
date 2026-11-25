@@ -31,9 +31,22 @@ pub fn write_status(inp: &ReportInputs) -> Result<(PathBuf, PathBuf), OpsError> 
     let md_path = dir.join("status.md");
     let status = status_json(inp)?;
     let body = serde_json::to_string_pretty(&status).map_err(|e| OpsError::Io(e.to_string()))?;
-    std::fs::write(&json_path, body).map_err(|e| OpsError::Io(e.to_string()))?;
-    std::fs::write(&md_path, status_md(&status)).map_err(|e| OpsError::Io(e.to_string()))?;
+    replace_file(&json_path, body.as_ref())?;
+    replace_file(&md_path, status_md(&status).as_bytes())?;
     Ok((md_path, json_path))
+}
+
+/// Write `bytes` to a temporary file beside `path`, then rename it over `path`.
+fn replace_file(path: &std::path::Path, bytes: &[u8]) -> Result<(), OpsError> {
+    let mut tmp = path.as_os_str().to_owned();
+    tmp.push(".tmp");
+    let tmp = PathBuf::from(tmp);
+    let io = |e: std::io::Error| OpsError::Io(e.to_string());
+    std::fs::write(&tmp, bytes).map_err(io)?;
+    std::fs::rename(&tmp, path).map_err(|e| {
+        let _ = std::fs::remove_file(&tmp);
+        io(e)
+    })
 }
 
 fn text(v: &Value) -> String {
