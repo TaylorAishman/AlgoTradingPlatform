@@ -105,6 +105,12 @@ pub fn reconcile(ctx: &LiveContext<'_>) -> Result<ReconcileReport, LiveError> {
         let detail = breaks.join("; ");
         return halt(ctx, "reconciliation_position", &detail);
     }
+    let broker_cash = account::account(ctx.http)?.cash;
+    let ledger_cash = ctx.store.cash(Book::Paper)?;
+    if (broker_cash - ledger_cash).abs() > ctx.cfg.risk.cash_tolerance {
+        let detail = format!("broker {broker_cash}, ledger {ledger_cash}");
+        return halt(ctx, "reconciliation_cash", &detail);
+    }
     Ok(ReconcileReport {
         clean: true,
         halt_reason: None,
