@@ -5,7 +5,7 @@ use std::path::PathBuf;
 use anyhow::{anyhow, Context};
 use pt_config::config::Config;
 use pt_gate::error::GateError;
-use pt_gate::owner::{load_owner_file, OwnerFile};
+use pt_gate::owner::{load_owner_file, OwnerFile, Stage};
 
 use clap::Parser;
 
@@ -72,4 +72,29 @@ pub fn load_owner() -> anyhow::Result<OwnerFile> {
         ),
         other => anyhow!(other).context(format!("owner file {}", path.display())),
     })
+}
+
+/// The owner-file spelling of a stage.
+pub fn stage_name(stage: Stage) -> &'static str {
+    match stage {
+        Stage::Backtest => "backtest",
+        Stage::Ingest => "ingest",
+        Stage::DryRun => "dry_run",
+        Stage::FirstOrder => "first_order",
+        Stage::Paper => "paper",
+    }
+}
+
+/// Check the owner's stage against a command's minimum stage. Returns the
+/// refusal message when the stage is too low. Reads only the owner file.
+pub fn stage_refusal(command: &str, required: Stage) -> anyhow::Result<Option<String>> {
+    let current = load_owner()?.stage;
+    if current >= required {
+        return Ok(None);
+    }
+    Ok(Some(format!(
+        "`{command}` needs stage `{}` or later; the owner file grants stage `{}`",
+        stage_name(required),
+        stage_name(current)
+    )))
 }

@@ -13,9 +13,42 @@ use std::process::ExitCode;
 
 use clap::Parser;
 
-use cli::{Cli, Command};
+use cli::{CalendarCmd, Cli, Command, DataCmd, UniverseCmd};
+use pt_gate::owner::Stage;
 
+/// Exit code for a command the operating stage forbids.
+const EXIT_STAGE_FORBIDS: i32 = 4;
+
+/// The minimum stage of each command, with the name it is reported under.
+/// `None` means any stage may run it.
+fn minimum_stage(command: &Command) -> Option<(&'static str, Stage)> {
+    match command {
+        Command::Calendar {
+            action: CalendarCmd::Sync,
+        } => Some(("calendar sync", Stage::Ingest)),
+        Command::Data {
+            action: DataCmd::Ingest,
+        } => Some(("data ingest", Stage::Ingest)),
+        Command::Universe {
+            action: UniverseCmd::Verify,
+        } => Some(("universe verify", Stage::Ingest)),
+        Command::Doctor => Some(("doctor", Stage::Ingest)),
+        Command::Run => Some(("run", Stage::Ingest)),
+        Command::CancelOpen(_) => Some(("cancel-open", Stage::FirstOrder)),
+        Command::Flatten(_) => Some(("flatten", Stage::Paper)),
+        _ => None,
+    }
+}
+
+/// Check the minimum stage, then run the command. The check comes before any
+/// command module runs, so a refused command loads no key and makes no request.
 fn dispatch(cli: &Cli) -> anyhow::Result<i32> {
+    if let Some((name, required)) = minimum_stage(&cli.command) {
+        if let Some(message) = wiring::stage_refusal(name, required)? {
+            eprintln!("error: {message}");
+            return Ok(EXIT_STAGE_FORBIDS);
+        }
+    }
     match &cli.command {
         Command::Config { action } => cmd_config::config(action),
         Command::Gates => cmd_config::gates(),
