@@ -1,6 +1,7 @@
 //! Market data repositories: versioned daily bars.
 
 use chrono::{DateTime, NaiveDate, SecondsFormat, Utc};
+use pt_calendar::calendar::TradingCalendar;
 use pt_core::money::Price;
 use pt_core::types::{Adjustment, Bar, Symbol};
 use rusqlite::{params, OptionalExtension};
@@ -202,5 +203,40 @@ impl Store {
             });
         }
         Ok(out)
+    }
+
+    /// Stores trading session dates, all or nothing; dates already stored
+    /// are left as they are.
+    pub fn put_sessions(&self, dates: &[NaiveDate]) -> Result<(), StoreError> {
+        let tx = self.conn.unchecked_transaction()?;
+        {
+            let mut insert =
+                tx.prepare("INSERT OR IGNORE INTO calendar_sessions (date) VALUES (?1)")?;
+            for d in dates {
+                insert.execute(params![d.format("%Y-%m-%d").to_string()])?;
+            }
+        }
+        tx.commit()?;
+        Ok(())
+    }
+
+    /// The calendar of every stored session; `NotFound` when there are none.
+    pub fn calendar(&self) -> Result<TradingCalendar, StoreError> {
+        let mut stmt = self
+            .conn
+            .prepare("SELECT date FROM calendar_sessions ORDER BY date")?;
+        let texts = stmt.query_map([], |r| r.get::<_, String>(0))?;
+        let mut dates = Vec::new();
+        for t in texts {
+            let t = t?;
+            dates.push(
+                NaiveDate::parse_from_str(&t, "%Y-%m-%d")
+                    .map_err(|e| StoreError::Codec(format!("bad date {t}: {e}")))?,
+            );
+        }
+        if dates.is_empty() {
+            return Err(StoreError::NotFound("calendar sessions".to_string()));
+        }
+        TradingCalendar::new(dates).map_err(|e| StoreError::Codec(e.to_string()))
     }
 }
