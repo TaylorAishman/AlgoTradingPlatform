@@ -5,7 +5,9 @@ use std::path::Path;
 use anyhow::{anyhow, Context};
 use pt_core::types::Adjustment;
 use pt_data::csv_import::{import_bars_csv, import_calendar_csv};
+use pt_data::ingest::ingest;
 use pt_data::quality::check_gaps;
+use pt_data::reference::sync_calendar;
 use pt_store::db::Store;
 
 use crate::cli::DataCmd;
@@ -52,8 +54,8 @@ pub fn data(action: &DataCmd) -> anyhow::Result<i32> {
             println!("imported {n} bars");
             Ok(0)
         }
+        DataCmd::Ingest => data_ingest(),
         DataCmd::Check => check(),
-        _ => anyhow::bail!("`data` is not implemented yet"),
     }
 }
 
@@ -82,4 +84,60 @@ fn check() -> anyhow::Result<i32> {
         println!("{} {}", gap.symbol, gap.date.format("%Y-%m-%d"));
     }
     Ok(1)
+}
+
+/// The market date at the broker now, and whether today's session has closed
+/// (R-385). `next_close` falls on today's date only while today's close is
+/// still ahead.
+fn broker_today(http: &pt_alpaca::http::HttpClient) -> anyhow::Result<(chrono::NaiveDate, bool)> {
+    let clock = pt_alpaca::reference::clock(http).context("reading the broker clock")?;
+    let today = clock.timestamp.date_naive();
+    let closed = clock.next_close.date_naive() > today;
+    Ok((today, closed))
+}
+
+/// Fetch the broker calendar from the configured data start to the broker's
+/// date and store it.
+pub fn calendar_sync() -> anyhow::Result<i32> {
+    let cfg = wiring::load_config()?;
+    let store = open_store()?;
+    let http = wiring::build_client()?;
+    let (today, _) = broker_today(&http)?;
+    let n = sync_calendar(&store, &http, cfg.data.start, today)?;
+    println!("synced {n} sessions");
+    Ok(0)
+}
+
+/// Fetch raw and adjusted bars through the expected last session: the latest
+/// synced session that has closed at the broker's clock.
+fn data_ingest() -> anyhow::Result<i32> {
+    let cfg = wiring::load_config()?;
+    let store = open_store()?;
+    let http = wiring::build_client()?;
+    let (today, closed) = broker_today(&http)?;
+    let calendar = store.calendar().context("reading the calendar")?;
+    let last_day = if closed {
+        today
+    } else {
+        today.pred_opt().context("date out of range")?
+    };
+    let Some(through) = calendar
+        .sessions_between(chrono::NaiveDate::MIN, last_day)
+        .last()
+        .copied()
+    else {
+        anyhow::bail!("no synced session on or before {last_day}: run `trader calendar sync`");
+    };
+    let report = ingest(&store, &http, &cfg, through, chrono::Utc::now())?;
+    for (name, stats) in [("raw", report.raw), ("adjusted", report.adjusted)] {
+        println!(
+            "{name}: {} inserted, {} unchanged, {} restated",
+            stats.inserted, stats.unchanged, stats.restated
+        );
+    }
+    if !report.complete {
+        wiring::log("warn", &format!("some symbols lack a bar for {through}"));
+    }
+    println!("through {through}");
+    Ok(0)
 }

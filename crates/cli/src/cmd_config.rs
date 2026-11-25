@@ -54,7 +54,7 @@ pub fn gates() -> anyhow::Result<i32> {
 pub fn calendar(action: &CalendarCmd) -> anyhow::Result<i32> {
     match action {
         CalendarCmd::Import { csv } => crate::cmd_data::calendar_import(csv),
-        CalendarCmd::Sync => anyhow::bail!("`calendar sync` is not implemented yet"),
+        CalendarCmd::Sync => crate::cmd_data::calendar_sync(),
     }
 }
 
