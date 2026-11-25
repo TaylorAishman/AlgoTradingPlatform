@@ -22,16 +22,63 @@ pub struct ReportInputs<'a> {
     pub now: DateTime<Utc>,
 }
 
-/// Writes `status.json` into the configured output directory and returns the
+/// Writes `status.json` and `status.md` into the configured output directory and returns the
 /// paths of `status.md` and `status.json`.
 pub fn write_status(inp: &ReportInputs) -> Result<(PathBuf, PathBuf), OpsError> {
     let dir = PathBuf::from(&inp.cfg.run.output_dir);
     std::fs::create_dir_all(&dir).map_err(|e| OpsError::Io(e.to_string()))?;
     let json_path = dir.join("status.json");
-    let body = serde_json::to_string_pretty(&status_json(inp)?)
-        .map_err(|e| OpsError::Io(e.to_string()))?;
+    let md_path = dir.join("status.md");
+    let status = status_json(inp)?;
+    let body = serde_json::to_string_pretty(&status).map_err(|e| OpsError::Io(e.to_string()))?;
     std::fs::write(&json_path, body).map_err(|e| OpsError::Io(e.to_string()))?;
-    Ok((dir.join("status.md"), json_path))
+    std::fs::write(&md_path, status_md(&status)).map_err(|e| OpsError::Io(e.to_string()))?;
+    Ok((md_path, json_path))
+}
+
+fn text(v: &Value) -> String {
+    match v {
+        Value::Null => "-".to_string(),
+        Value::String(s) => s.clone(),
+        other => other.to_string(),
+    }
+}
+
+fn status_md(s: &Value) -> String {
+    let mut out = String::new();
+    out.push_str("# Status\n\n");
+    out.push_str("Paper trading. Not investment advice.\n\n");
+    out.push_str("Returns are price returns: the paper account does not simulate dividends.\n\n");
+    out.push_str(&format!(
+        "- Generated at: {}\n- Stage: {}\n- Feed: {}\n- Equity: {}\n- Cash: {}\n\n",
+        text(&s["generated_at"]),
+        text(&s["stage"]),
+        text(&s["feed"]),
+        text(&s["equity"]),
+        text(&s["cash"]),
+    ));
+    out.push_str("## Positions\n\n| Symbol | Qty | Value |\n| --- | --- | --- |\n");
+    for p in s["positions"].as_array().into_iter().flatten() {
+        out.push_str(&format!(
+            "| {} | {} | {} |\n",
+            text(&p["symbol"]),
+            text(&p["qty"]),
+            text(&p["value"])
+        ));
+    }
+    out.push_str("\n## Active halts\n\n");
+    let halts = s["active_halts"].as_array().cloned().unwrap_or_default();
+    if halts.is_empty() {
+        out.push_str("None.\n");
+    }
+    for h in &halts {
+        out.push_str(&format!(
+            "- {}: {}\n",
+            text(&h["reason"]),
+            text(&h["detail"])
+        ));
+    }
+    out
 }
 
 fn status_json(inp: &ReportInputs) -> Result<Value, OpsError> {
