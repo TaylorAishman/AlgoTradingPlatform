@@ -217,3 +217,62 @@ impl Store {
         Ok(out)
     }
 }
+
+/// Convert a stored integer to `u32`, or a `StoreError` when out of range.
+fn to_u32(column: &str, v: i64) -> Result<u32, StoreError> {
+    u32::try_from(v).map_err(|_| StoreError::Codec(format!("{column} out of range: {v}")))
+}
+
+/// One row of the `trials` table: a distinct trial within a strategy family.
+#[derive(Debug, Clone, PartialEq)]
+pub struct TrialRow {
+    pub family: String,
+    pub trial_hash: String,
+    pub sharpe: f64,
+    pub n_obs: u32,
+    pub runs: u32,
+}
+
+impl Store {
+    /// Register a trial. A repeated (family, trial_hash) adds one to `runs` and
+    /// updates `sharpe`, but keeps the original `n_obs`, so it counts once.
+    pub fn register_trial(&self, trial: &TrialRow) -> Result<(), StoreError> {
+        self.conn.execute(
+            "INSERT INTO trials (family, trial_hash, sharpe, n_obs, runs) \
+             VALUES (?1, ?2, ?3, ?4, 1) \
+             ON CONFLICT (family, trial_hash) DO UPDATE SET \
+             runs = runs + 1, sharpe = excluded.sharpe",
+            rusqlite::params![trial.family, trial.trial_hash, trial.sharpe, trial.n_obs],
+        )?;
+        Ok(())
+    }
+
+    /// Every trial of a family, ordered by hash.
+    pub fn trials(&self, family: &str) -> Result<Vec<TrialRow>, StoreError> {
+        let mut stmt = self.conn.prepare(
+            "SELECT family, trial_hash, sharpe, n_obs, runs FROM trials \
+             WHERE family = ?1 ORDER BY trial_hash",
+        )?;
+        let rows = stmt.query_map([family], |r| {
+            Ok((
+                r.get::<_, String>(0)?,
+                r.get::<_, String>(1)?,
+                r.get::<_, f64>(2)?,
+                r.get::<_, i64>(3)?,
+                r.get::<_, i64>(4)?,
+            ))
+        })?;
+        let mut out = Vec::new();
+        for row in rows {
+            let (family, trial_hash, sharpe, n_obs, runs) = row?;
+            out.push(TrialRow {
+                family,
+                trial_hash,
+                sharpe,
+                n_obs: to_u32("n_obs", n_obs)?,
+                runs: to_u32("runs", runs)?,
+            });
+        }
+        Ok(out)
+    }
+}
