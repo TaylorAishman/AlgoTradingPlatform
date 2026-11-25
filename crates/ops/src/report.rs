@@ -36,6 +36,17 @@ pub fn write_status(inp: &ReportInputs) -> Result<(PathBuf, PathBuf), OpsError> 
     Ok((md_path, json_path))
 }
 
+/// Hours from the finish of the latest `ok` run to `now`; `None` if no run has finished ok.
+pub fn last_ok_run_age_hours(store: &Store, now: DateTime<Utc>) -> Result<Option<f64>, OpsError> {
+    let finished = store
+        .runs()?
+        .into_iter()
+        .filter(|r| r.status == "ok")
+        .filter_map(|r| r.finished_at)
+        .max();
+    Ok(finished.map(|t| (now - t).num_seconds() as f64 / 3600.0))
+}
+
 /// Write `bytes` to a temporary file beside `path`, then rename it over `path`.
 fn replace_file(path: &std::path::Path, bytes: &[u8]) -> Result<(), OpsError> {
     let mut tmp = path.as_os_str().to_owned();
