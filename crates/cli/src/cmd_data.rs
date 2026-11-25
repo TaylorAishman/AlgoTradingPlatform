@@ -110,24 +110,54 @@ pub fn calendar_sync() -> anyhow::Result<i32> {
 
 /// Fetch raw and adjusted bars through the expected last session: the latest
 /// synced session that has closed at the broker's clock.
-fn data_ingest() -> anyhow::Result<i32> {
-    let cfg = wiring::load_config()?;
-    let store = open_store()?;
-    let http = wiring::build_client()?;
-    let (today, closed) = broker_today(&http)?;
+/// The expected last session: the latest synced session that has closed at
+/// the broker's clock.
+fn through_date(
+    store: &Store,
+    http: &pt_alpaca::http::HttpClient,
+) -> anyhow::Result<chrono::NaiveDate> {
+    let (today, closed) = broker_today(http)?;
     let calendar = store.calendar().context("reading the calendar")?;
     let last_day = if closed {
         today
     } else {
         today.pred_opt().context("date out of range")?
     };
-    let Some(through) = calendar
+    calendar
         .sessions_between(chrono::NaiveDate::MIN, last_day)
         .last()
         .copied()
-    else {
-        anyhow::bail!("no synced session on or before {last_day}: run `trader calendar sync`");
-    };
+        .ok_or_else(|| {
+            anyhow!("no synced session on or before {last_day}: run `trader calendar sync`")
+        })
+}
+
+/// Check every universe symbol against the broker and the stored bars, one
+/// `SYMBOL PASS|FAIL reasons` line each. Exits 1 if any symbol fails.
+pub fn universe_verify() -> anyhow::Result<i32> {
+    let cfg = wiring::load_config()?;
+    let store = open_store()?;
+    let http = wiring::build_client()?;
+    let through = through_date(&store, &http)?;
+    let checks = pt_data::universe::verify_universe(&store, &http, &cfg, through)?;
+    let mut failed = false;
+    for c in &checks {
+        if c.pass {
+            println!("{} PASS", c.symbol);
+        } else {
+            failed = true;
+            println!("{} FAIL {}", c.symbol, c.reasons.join(", "));
+        }
+    }
+    Ok(i32::from(failed))
+}
+
+/// Fetch raw and adjusted bars through the expected last session.
+fn data_ingest() -> anyhow::Result<i32> {
+    let cfg = wiring::load_config()?;
+    let store = open_store()?;
+    let http = wiring::build_client()?;
+    let through = through_date(&store, &http)?;
     let report = ingest(&store, &http, &cfg, through, chrono::Utc::now())?;
     for (name, stats) in [("raw", report.raw), ("adjusted", report.adjusted)] {
         println!(
