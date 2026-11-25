@@ -64,6 +64,31 @@ pub fn simulate(
     view: &dyn MarketView,
     cal: &TradingCalendar,
 ) -> Result<SimResult, EngineError> {
+    if !cal.is_session(cfg.start) {
+        return Err(EngineError::Invalid(format!(
+            "start {} is not a session",
+            cfg.start
+        )));
+    }
+    if !cal.is_session(cfg.end) && cal.next_session(cfg.end).is_none() {
+        return Err(EngineError::Invalid(format!(
+            "end {} is beyond the last session",
+            cfg.end
+        )));
+    }
+    for &date in weights.keys() {
+        if !cal.is_session(date) {
+            return Err(EngineError::Invalid(format!(
+                "weights date {date} is not a session"
+            )));
+        }
+        if date < cfg.start || date > cfg.end {
+            return Err(EngineError::Invalid(format!(
+                "weights date {date} is outside {} to {}",
+                cfg.start, cfg.end
+            )));
+        }
+    }
     let broker = SimBroker::new(cfg.cost);
     let mut book = Book::new(cfg.initial_capital);
     let mut result = SimResult {
