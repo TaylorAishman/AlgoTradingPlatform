@@ -87,3 +87,31 @@ pub fn import_bars_csv(
     store.upsert_bars(&rows, fetched_at)?;
     Ok(rows.len())
 }
+
+/// Imports trading session dates from CSV text with a header row containing a
+/// `date` column. Nothing is stored if any row is malformed. Returns the
+/// number of dates read.
+pub fn import_calendar_csv(store: &Store, text: &str) -> Result<usize, DataError> {
+    let mut reader = csv::ReaderBuilder::new()
+        .trim(csv::Trim::All)
+        .from_reader(text.as_bytes());
+    let headers = reader.headers().map_err(|e| csv_err(1, e.to_string()))?;
+    let col = headers
+        .iter()
+        .position(|h| h.eq_ignore_ascii_case("date"))
+        .ok_or_else(|| csv_err(1, "missing column date"))?;
+
+    let mut dates = Vec::new();
+    for (i, record) in reader.records().enumerate() {
+        let line = i + 2;
+        let record = record.map_err(|e| csv_err(line, e.to_string()))?;
+        let field = record
+            .get(col)
+            .ok_or_else(|| csv_err(line, "missing field date"))?;
+        let date = NaiveDate::parse_from_str(field, "%Y-%m-%d")
+            .map_err(|e| csv_err(line, format!("bad date: {e}")))?;
+        dates.push(date);
+    }
+    store.put_sessions(&dates)?;
+    Ok(dates.len())
+}
