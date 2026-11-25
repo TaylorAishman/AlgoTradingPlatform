@@ -17,6 +17,17 @@ pub struct RunRow {
     pub phases: String,
 }
 
+/// One row of the `halts` table. A halt is active while `cleared_at` is `None`.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct HaltRow {
+    pub id: i64,
+    pub reason: String,
+    pub detail: String,
+    pub set_at: DateTime<Utc>,
+    pub cleared_at: Option<DateTime<Utc>>,
+    pub clear_note: Option<String>,
+}
+
 fn instant_to_text(t: DateTime<Utc>) -> String {
     t.to_rfc3339_opts(SecondsFormat::Secs, true)
 }
@@ -97,6 +108,73 @@ impl Store {
                 config_hash,
                 code_version,
                 phases,
+            });
+        }
+        Ok(out)
+    }
+
+    /// Set a halt and return its id. It stays active until cleared.
+    pub fn set_halt(
+        &self,
+        reason: &str,
+        detail: &str,
+        at: DateTime<Utc>,
+    ) -> Result<i64, StoreError> {
+        self.conn.execute(
+            "INSERT INTO halts (reason, detail, set_at) VALUES (?1, ?2, ?3)",
+            rusqlite::params![reason, detail, instant_to_text(at)],
+        )?;
+        Ok(self.conn.last_insert_rowid())
+    }
+
+    /// Clear an active halt with a note. The row stays as history.
+    pub fn clear_halt(&self, id: i64, note: &str, at: DateTime<Utc>) -> Result<(), StoreError> {
+        let n = self.conn.execute(
+            "UPDATE halts SET cleared_at = ?1, clear_note = ?2 \
+             WHERE id = ?3 AND cleared_at IS NULL",
+            rusqlite::params![instant_to_text(at), note, id],
+        )?;
+        if n == 0 {
+            return Err(StoreError::NotFound(format!("active halt {id}")));
+        }
+        Ok(())
+    }
+
+    /// Halts not yet cleared, oldest first.
+    pub fn active_halts(&self) -> Result<Vec<HaltRow>, StoreError> {
+        self.query_halts("WHERE cleared_at IS NULL")
+    }
+
+    /// Every halt, cleared or not, oldest first.
+    pub fn halts(&self) -> Result<Vec<HaltRow>, StoreError> {
+        self.query_halts("")
+    }
+
+    fn query_halts(&self, filter: &str) -> Result<Vec<HaltRow>, StoreError> {
+        let sql = format!(
+            "SELECT id, reason, detail, set_at, cleared_at, clear_note FROM halts {filter} ORDER BY id"
+        );
+        let mut stmt = self.conn.prepare(&sql)?;
+        let rows = stmt.query_map([], |r| {
+            Ok((
+                r.get::<_, i64>(0)?,
+                r.get::<_, String>(1)?,
+                r.get::<_, String>(2)?,
+                r.get::<_, String>(3)?,
+                r.get::<_, Option<String>>(4)?,
+                r.get::<_, Option<String>>(5)?,
+            ))
+        })?;
+        let mut out = Vec::new();
+        for row in rows {
+            let (id, reason, detail, set, cleared, clear_note) = row?;
+            out.push(HaltRow {
+                id,
+                reason,
+                detail,
+                set_at: text_to_instant(&set)?,
+                cleared_at: cleared.as_deref().map(text_to_instant).transpose()?,
+                clear_note,
             });
         }
         Ok(out)
