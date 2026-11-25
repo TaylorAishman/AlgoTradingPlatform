@@ -1,8 +1,10 @@
 //! Operations records: the log of runs of the binary.
 
+use crate::codec::{dec_to_text, text_to_dec};
 use crate::db::Store;
 use crate::error::StoreError;
-use chrono::{DateTime, SecondsFormat, Utc};
+use chrono::{DateTime, NaiveDate, SecondsFormat, Utc};
+use rust_decimal::Decimal;
 
 /// One row of the `runs` table.
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -272,6 +274,66 @@ impl Store {
                 n_obs: to_u32("n_obs", n_obs)?,
                 runs: to_u32("runs", runs)?,
             });
+        }
+        Ok(out)
+    }
+}
+
+impl Store {
+    /// Save a backtest and its equity curve in one transaction; returns the id.
+    pub fn save_backtest(
+        &self,
+        family: &str,
+        trial_hash: &str,
+        config_hash: &str,
+        equity: &[(NaiveDate, Decimal)],
+        at: DateTime<Utc>,
+    ) -> Result<i64, StoreError> {
+        let tx = self.conn.unchecked_transaction()?;
+        tx.execute(
+            "INSERT INTO backtest_runs (family, trial_hash, config_hash, created_at) \
+             VALUES (?1, ?2, ?3, ?4)",
+            rusqlite::params![family, trial_hash, config_hash, instant_to_text(at)],
+        )?;
+        let id = tx.last_insert_rowid();
+        {
+            let mut stmt = tx.prepare(
+                "INSERT INTO backtest_equity (run_id, date, equity) VALUES (?1, ?2, ?3)",
+            )?;
+            for (date, value) in equity {
+                stmt.execute(rusqlite::params![
+                    id,
+                    date.format("%Y-%m-%d").to_string(),
+                    dec_to_text(*value)
+                ])?;
+            }
+        }
+        tx.commit()?;
+        Ok(id)
+    }
+
+    /// The equity curve of a saved backtest, in date order.
+    pub fn backtest_equity(&self, id: i64) -> Result<Vec<(NaiveDate, Decimal)>, StoreError> {
+        let known: i64 = self.conn.query_row(
+            "SELECT COUNT(*) FROM backtest_runs WHERE id = ?1",
+            [id],
+            |r| r.get(0),
+        )?;
+        if known == 0 {
+            return Err(StoreError::NotFound(format!("backtest {id}")));
+        }
+        let mut stmt = self
+            .conn
+            .prepare("SELECT date, equity FROM backtest_equity WHERE run_id = ?1 ORDER BY date")?;
+        let rows = stmt.query_map([id], |r| {
+            Ok((r.get::<_, String>(0)?, r.get::<_, String>(1)?))
+        })?;
+        let mut out = Vec::new();
+        for row in rows {
+            let (date, equity) = row?;
+            let date = NaiveDate::parse_from_str(&date, "%Y-%m-%d")
+                .map_err(|e| StoreError::Codec(format!("invalid date {date:?}: {e}")))?;
+            out.push((date, text_to_dec(&equity)?));
         }
         Ok(out)
     }
