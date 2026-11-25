@@ -1,10 +1,12 @@
 //! Universe verification: each candidate is checked against the broker's asset status.
 
+use std::collections::HashSet;
+
 use chrono::NaiveDate;
 use pt_alpaca::http::HttpClient;
 use pt_alpaca::reference::asset;
 use pt_config::config::Config;
-use pt_core::types::Symbol;
+use pt_core::types::{Adjustment, Symbol};
 use pt_store::db::Store;
 
 use crate::error::DataError;
@@ -19,13 +21,17 @@ pub struct UniverseCheck {
 
 /// Checks every universe symbol (the risk-free symbol is skipped) through
 /// `through`. Asset-status reasons: `not_found`, `not_tradable`,
-/// `not_shortable`, `hard_to_borrow`. Returns the checks in universe order.
+/// `not_shortable`, `hard_to_borrow`. History reasons (R-134):
+/// `history_starts_late` (first raw bar after the first session on or after
+/// `data.start`, or no bars) and `gaps:<n>` (sessions missing after the first
+/// bar). Returns the checks in universe order.
 pub fn verify_universe(
-    _store: &Store,
+    store: &Store,
     http: &HttpClient,
     cfg: &Config,
-    _through: NaiveDate,
+    through: NaiveDate,
 ) -> Result<Vec<UniverseCheck>, DataError> {
+    let calendar = store.calendar()?;
     let mut out = Vec::new();
     for inst in &cfg.universe {
         if inst.symbol == cfg.strategy.risk_free_symbol {
@@ -44,6 +50,35 @@ pub fn verify_universe(
                     reasons.push("not_shortable".to_string());
                 } else if !a.easy_to_borrow {
                     reasons.push("hard_to_borrow".to_string());
+                }
+            }
+        }
+        let bars = store.bars_asof(
+            &symbol,
+            Adjustment::Raw,
+            &cfg.data.feed,
+            NaiveDate::MIN,
+            through,
+            None,
+        )?;
+        match bars.first() {
+            None => reasons.push("history_starts_late".to_string()),
+            Some(first) => {
+                let expected = calendar
+                    .sessions_between(cfg.data.start, through)
+                    .first()
+                    .copied();
+                if expected.is_some_and(|e| first.date > e) {
+                    reasons.push("history_starts_late".to_string());
+                }
+                let have: HashSet<NaiveDate> = bars.iter().map(|b| b.date).collect();
+                let missing = calendar
+                    .sessions_between(first.date, through)
+                    .iter()
+                    .filter(|d| !have.contains(*d))
+                    .count();
+                if missing > 0 {
+                    reasons.push(format!("gaps:{missing}"));
                 }
             }
         }
