@@ -2,7 +2,7 @@
 
 use chrono::{DateTime, NaiveDate, NaiveTime, SecondsFormat, Utc};
 use pt_core::order_state::{transition_allowed, OrderState};
-use pt_core::types::{Side, Symbol};
+use pt_core::types::{Positions, Side, Symbol};
 use rusqlite::{params, params_from_iter, Row, Transaction, TransactionBehavior};
 use rust_decimal::Decimal;
 
@@ -434,6 +434,179 @@ impl Store {
                     .map_err(|_| StoreError::Codec(format!("invalid qty {qty}")))?,
                 price: text_to_dec(&r.get::<_, String>(5)?)?,
                 at: text_to_time(&r.get::<_, String>(6)?)?,
+            });
+        }
+        Ok(out)
+    }
+}
+
+/// Which ledger an entry belongs to.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum Book {
+    Paper,
+    Shadow,
+}
+
+impl Book {
+    fn as_text(self) -> &'static str {
+        match self {
+            Book::Paper => "paper",
+            Book::Shadow => "shadow",
+        }
+    }
+}
+
+/// One cash and position movement in a book.
+#[derive(Debug, Clone, PartialEq)]
+pub struct LedgerEntry {
+    pub book: Book,
+    pub date: NaiveDate,
+    pub kind: String,
+    pub symbol: Option<Symbol>,
+    pub qty: i64,
+    pub price: Option<Decimal>,
+    pub cash_delta: Decimal,
+    pub ref_id: Option<String>,
+}
+
+impl Store {
+    /// Appends a ledger entry and returns its id. Ids increase with insertion.
+    pub fn append_ledger(&self, e: &LedgerEntry) -> Result<i64, StoreError> {
+        self.conn.execute(
+            "INSERT INTO ledger_entries (book, date, kind, symbol, qty, price, cash_delta, \
+             ref_id) VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8)",
+            params![
+                e.book.as_text(),
+                date_to_text(e.date),
+                e.kind,
+                e.symbol.as_ref().map(Symbol::as_str),
+                e.qty,
+                e.price.map(dec_to_text),
+                dec_to_text(e.cash_delta),
+                e.ref_id,
+            ],
+        )?;
+        Ok(self.conn.last_insert_rowid())
+    }
+
+    /// The entries of one book, in insertion order.
+    pub fn ledger(&self, book: Book) -> Result<Vec<LedgerEntry>, StoreError> {
+        let mut stmt = self.conn.prepare(
+            "SELECT date, kind, symbol, qty, price, cash_delta, ref_id \
+             FROM ledger_entries WHERE book = ?1 ORDER BY id",
+        )?;
+        let mut rows = stmt.query(params![book.as_text()])?;
+        let mut out = Vec::new();
+        while let Some(r) = rows.next()? {
+            let symbol: Option<String> = r.get(2)?;
+            let price: Option<String> = r.get(4)?;
+            out.push(LedgerEntry {
+                book,
+                date: text_to_date(&r.get::<_, String>(0)?)?,
+                kind: r.get(1)?,
+                symbol: symbol
+                    .map(|s| Symbol::new(&s))
+                    .transpose()
+                    .map_err(|e| StoreError::Codec(format!("invalid symbol: {e}")))?,
+                qty: r.get(3)?,
+                price: price.map(|p| text_to_dec(&p)).transpose()?,
+                cash_delta: text_to_dec(&r.get::<_, String>(5)?)?,
+                ref_id: r.get(6)?,
+            });
+        }
+        Ok(out)
+    }
+
+    /// Net quantity per symbol in a book; symbols with a net of zero are absent.
+    pub fn positions(&self, book: Book) -> Result<Positions, StoreError> {
+        let mut out = Positions::new();
+        for e in self.ledger(book)? {
+            if let Some(s) = e.symbol {
+                *out.entry(s).or_insert(0) += e.qty;
+            }
+        }
+        out.retain(|_, q| *q != 0);
+        Ok(out)
+    }
+
+    /// The sum of the cash deltas in a book; zero when it has no entries.
+    pub fn cash(&self, book: Book) -> Result<Decimal, StoreError> {
+        Ok(self
+            .ledger(book)?
+            .iter()
+            .fold(Decimal::ZERO, |acc, e| acc + e.cash_delta))
+    }
+
+    /// Net quantity per symbol using entries dated on or before `as_of`.
+    pub fn positions_at(&self, book: Book, as_of: NaiveDate) -> Result<Positions, StoreError> {
+        let mut out = Positions::new();
+        for e in self.ledger(book)?.into_iter().filter(|e| e.date <= as_of) {
+            if let Some(s) = e.symbol {
+                *out.entry(s).or_insert(0) += e.qty;
+            }
+        }
+        out.retain(|_, q| *q != 0);
+        Ok(out)
+    }
+
+    /// Cash using entries dated on or before `as_of`; zero when there are none.
+    pub fn cash_at(&self, book: Book, as_of: NaiveDate) -> Result<Decimal, StoreError> {
+        Ok(self
+            .ledger(book)?
+            .iter()
+            .filter(|e| e.date <= as_of)
+            .fold(Decimal::ZERO, |acc, e| acc + e.cash_delta))
+    }
+}
+
+/// One day's valuation of a book.
+#[derive(Debug, Clone, PartialEq)]
+pub struct EquitySnapshot {
+    pub book: Book,
+    pub date: NaiveDate,
+    pub cash: Decimal,
+    pub positions_value: Decimal,
+    pub equity: Decimal,
+    pub recorded_at: DateTime<Utc>,
+}
+
+impl Store {
+    /// Stores a snapshot, replacing the values of an existing one for the same
+    /// book and date while keeping its first `recorded_at`.
+    pub fn put_equity_snapshot(&self, s: &EquitySnapshot) -> Result<(), StoreError> {
+        self.conn.execute(
+            "INSERT INTO equity_snapshots (book, date, cash, positions_value, equity, \
+             recorded_at) VALUES (?1, ?2, ?3, ?4, ?5, ?6) \
+             ON CONFLICT (book, date) DO UPDATE SET cash = excluded.cash, \
+             positions_value = excluded.positions_value, equity = excluded.equity",
+            params![
+                s.book.as_text(),
+                date_to_text(s.date),
+                dec_to_text(s.cash),
+                dec_to_text(s.positions_value),
+                dec_to_text(s.equity),
+                time_to_text(s.recorded_at),
+            ],
+        )?;
+        Ok(())
+    }
+
+    /// The snapshots of one book in date order.
+    pub fn equity_series(&self, book: Book) -> Result<Vec<EquitySnapshot>, StoreError> {
+        let mut stmt = self.conn.prepare(
+            "SELECT date, cash, positions_value, equity, recorded_at \
+             FROM equity_snapshots WHERE book = ?1 ORDER BY date",
+        )?;
+        let mut rows = stmt.query(params![book.as_text()])?;
+        let mut out = Vec::new();
+        while let Some(r) = rows.next()? {
+            out.push(EquitySnapshot {
+                book,
+                date: text_to_date(&r.get::<_, String>(0)?)?,
+                cash: text_to_dec(&r.get::<_, String>(1)?)?,
+                positions_value: text_to_dec(&r.get::<_, String>(2)?)?,
+                equity: text_to_dec(&r.get::<_, String>(3)?)?,
+                recorded_at: text_to_time(&r.get::<_, String>(4)?)?,
             });
         }
         Ok(out)
