@@ -16,6 +16,7 @@ use rust_decimal::Decimal;
 
 use crate::book::Book;
 use crate::broker::SimBroker;
+use crate::cost::borrow_cost;
 use crate::error::EngineError;
 
 /// What a simulation runs over and with.
@@ -93,6 +94,16 @@ pub fn simulate(
             )?;
         }
         let closes = closes_on(book.positions.keys(), date, view)?;
+        let short_value: Decimal = book
+            .positions
+            .iter()
+            .filter(|(_, q)| **q < 0)
+            .map(|(s, q)| closes[s].notional(-*q).0)
+            .sum();
+        // One day per session for now; calendar days to the next session come later.
+        let borrow = borrow_cost(&cfg.cost, Money(short_value), 1).0;
+        book.cash -= borrow;
+        result.borrow_total += borrow;
         let equity = book.equity(&closes)?;
         result.equity.push((date, equity));
     }
