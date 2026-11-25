@@ -10,6 +10,7 @@ use chrono::{NaiveTime, TimeZone, Utc};
 use pt_alpaca::activities::{fill_activities, WireFill};
 use pt_alpaca::orders_read::order_by_client_id;
 use pt_core::order_state::OrderState;
+use pt_ops::alert::Level;
 use pt_store::trading::{Book, FillRow, LedgerEntry, OrderRow};
 use rust_decimal::Decimal;
 
@@ -65,13 +66,20 @@ pub fn settle(ctx: &LiveContext) -> Result<SettleReport, LiveError> {
         let Some(wire) = order_by_client_id(ctx.http, &row.client_order_id)? else {
             continue;
         };
+        let broker_state = match map_status(&wire.status, wire.filled_qty) {
+            Ok(state) => state,
+            Err(LiveError::UnexpectedStatus(status)) => {
+                halt_unexpected(ctx, &row, &status)?;
+                continue;
+            }
+            Err(e) => return Err(e),
+        };
         for fill in activities.iter().filter(|f| f.order_id == wire.id) {
             if record_fill(ctx, &row, fill, &mut ledgered)? {
                 report.fills_recorded += 1;
                 *stored.entry(fill.order_id.clone()).or_default() += fill.qty;
             }
         }
-        let broker_state = map_status(&wire.status, wire.filled_qty)?;
         let stored_qty = stored.get(&wire.id).copied().unwrap_or(0);
         let (state, filled_qty) = supported(broker_state, wire.filled_qty, row.qty, stored_qty);
         if state == row.state && filled_qty == row.filled_qty {
@@ -106,6 +114,30 @@ pub fn settle(ctx: &LiveContext) -> Result<SettleReport, LiveError> {
     abandon_legs(ctx)?;
     report.legs_released = released_legs(ctx)?;
     Ok(report)
+}
+
+/// Sets an `unexpected_order_status` halt naming the order and a critical
+/// `halt_set` alert, unless one is already active. The order is left as it is.
+fn halt_unexpected(ctx: &LiveContext, row: &OrderRow, status: &str) -> Result<(), LiveError> {
+    const REASON: &str = "unexpected_order_status";
+    if ctx.store.active_halts()?.iter().any(|h| h.reason == REASON) {
+        return Ok(());
+    }
+    let detail = format!(
+        "order {} reported status {status}, which the design never causes",
+        row.client_order_id
+    );
+    let now = ctx.clock.now_utc();
+    ctx.store.set_halt(REASON, &detail, now)?;
+    ctx.alerter.alert(
+        ctx.store,
+        Level::Critical,
+        "halt_set",
+        &format!("halt {REASON}: {detail}"),
+        None,
+        now,
+    );
+    Ok(())
 }
 
 /// Moves each leg-2 intent whose leg 1 (same decision and symbol) ended
