@@ -1,9 +1,14 @@
-//! Alerts: every alert is logged and stored; delivery to a webhook comes later.
+//! Alerts: every alert is logged and stored, and posted once to an optional
+//! webhook. A slow or failing webhook never blocks or fails the caller.
 
 use crate::logging::format_event;
 use chrono::{DateTime, SecondsFormat, Utc};
 use pt_store::db::Store;
 use serde_json::json;
+use std::time::Duration;
+
+/// Longest the whole webhook request may take before it is abandoned.
+const WEBHOOK_TIMEOUT: Duration = Duration::from_secs(5);
 
 /// How serious an alert is.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -79,7 +84,12 @@ impl Alerter {
             "run_id": run_id,
         })
         .to_string();
-        ureq::post(url)
+        let agent: ureq::Agent = ureq::Agent::config_builder()
+            .timeout_global(Some(WEBHOOK_TIMEOUT))
+            .build()
+            .into();
+        agent
+            .post(url)
             .header("Content-Type", "application/json")
             .send(body)
             .is_ok()
