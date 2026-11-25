@@ -82,11 +82,9 @@ impl Strategy for Tsmom {
                     missing = Some("insufficient_history".to_string());
                     break;
                 };
-                let (Some(now), Some(then), Some(rf_then)) = (
-                    now,
-                    close_on(view, symbol, anchor),
-                    close_on(view, rf, anchor),
-                ) else {
+                let rf_then =
+                    close_on(view, rf, anchor).ok_or(StrategyError::MissingRiskFree(anchor))?;
+                let (Some(now), Some(then)) = (now, close_on(view, symbol, anchor)) else {
                     missing = Some("insufficient_history".to_string());
                     break;
                 };
