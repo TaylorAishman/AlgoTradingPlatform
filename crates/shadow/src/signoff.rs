@@ -1,9 +1,13 @@
 //! Sign-off evaluation: the seven fidelity criteria of R-341.
 
+use std::fs;
+use std::path::{Path, PathBuf};
+
 use pt_config::config::Config;
 use rust_decimal::prelude::ToPrimitive;
 use rust_decimal::Decimal;
 
+use crate::error::ShadowError;
 use crate::fidelity::Fidelity;
 
 /// One judged criterion: the measured value against its limit.
@@ -28,6 +32,8 @@ pub enum Verdict {
 pub struct SignoffReport {
     pub verdict: Verdict,
     pub criteria: Vec<Criterion>,
+    /// The data feed the paper period ran on.
+    pub feed: String,
 }
 
 fn bps(d: Decimal) -> f64 {
@@ -99,5 +105,34 @@ pub fn evaluate(f: &Fidelity, cfg: &Config) -> SignoffReport {
     } else {
         Verdict::Fail
     };
-    SignoffReport { verdict, criteria }
+    SignoffReport {
+        verdict,
+        criteria,
+        feed: cfg.data.feed.clone(),
+    }
+}
+
+/// Write the sign-off report to `signoff.md` in `out_dir`.
+pub fn write_signoff(report: &SignoffReport, out_dir: &Path) -> Result<PathBuf, ShadowError> {
+    let word = match report.verdict {
+        Verdict::Pass => "PASS",
+        Verdict::Fail => "FAIL",
+        Verdict::NotReady => "NOT READY",
+    };
+    let mut text = format!(
+        "# Paper-trading sign-off\n\nVerdict: {word}\n\nData feed: {}\n\n",
+        report.feed
+    );
+    text.push_str("| Criterion | Value | Limit | Result |\n|---|---|---|---|\n");
+    for c in &report.criteria {
+        let result = if c.pass { "PASS" } else { "FAIL" };
+        text.push_str(&format!(
+            "| {} | {} | {} | {} |\n",
+            c.id, c.value, c.limit, result
+        ));
+    }
+    text.push_str("\nPaper trading validates the system, not the strategy.\n");
+    let path = out_dir.join("signoff.md");
+    fs::write(&path, text).map_err(|e| ShadowError::Io(e.to_string()))?;
+    Ok(path)
 }
