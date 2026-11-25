@@ -339,9 +339,9 @@ How to read the tables:
 | V06 | validate-crosscheck | Add crosscheck and prove exact agreement at zero cost | R-370 | opus | crates/validate/src/crosscheck.rs, crates/validate/tests/crosscheck_zero.rs | cargo test -p pt-validate --test crosscheck_zero |
 | V07 | validate-crosscheck | Cross-check with proportional and borrow costs | R-371 | opus | crates/validate/src/crosscheck.rs, crates/validate/tests/crosscheck_costs.rs | cargo test -p pt-validate --test crosscheck_costs |
 | V08 | validate-crosscheck | Declare a run with rejected orders not comparable | R-372 | sonnet | crates/validate/src/crosscheck.rs, crates/validate/tests/crosscheck_rejections.rs | cargo test -p pt-validate --test crosscheck_rejections |
-| V09 | validate-overfit | Add dsr_for_run | R-373 | sonnet | crates/validate/src/overfit.rs, crates/validate/tests/dsr.rs | cargo test -p pt-validate --test dsr |
+| V09 | validate-overfit | Add dsr_for_run, taking the config for the feed and the risk-free closes aligned by date | R-373 | sonnet | crates/validate/src/overfit.rs, crates/validate/src/runner.rs, crates/validate/tests/dsr.rs | cargo test -p pt-validate --test dsr --test metrics |
 | V10 | validate-overfit | Add pbo_for_runs over common dates | R-374 | sonnet | crates/validate/src/overfit.rs, crates/validate/tests/pbo.rs | cargo test -p pt-validate --test pbo |
-| V11 | validate-overfit | Add compare_to_benchmark | R-375 | sonnet | crates/validate/src/overfit.rs, crates/validate/tests/benchmark.rs | cargo test -p pt-validate --test benchmark |
+| V11 | validate-overfit | Add compare_to_benchmark, taking the config, with Sharpe ratios on excess returns | R-375 | sonnet | crates/validate/src/overfit.rs, crates/validate/tests/benchmark.rs | cargo test -p pt-validate --test benchmark |
 | O01 | live-ids | Add client_order_id and first_order_id | R-280 | sonnet | crates/live/src/ids.rs, crates/live/tests/ids.rs | cargo test -p pt-live --test ids |
 | O02 | live-ids | Add map_status | R-281 | sonnet | crates/live/src/status.rs, crates/live/tests/map_status.rs | cargo test -p pt-live --test map_status |
 | O03 | live-lock | Add acquire_run_lock | R-310 | sonnet | crates/live/src/lock.rs, crates/live/tests/lock.rs | cargo test -p pt-live --test lock |
@@ -525,7 +525,7 @@ One line per chain: what to look for when reviewing it.
 - `ops-report`: The report is what the owner reads: check the disclaimer and the price-return note are present and that a halted or empty system still reports.
 - `validate-backtest`: Check what goes into the trial hash, and that a failed run leaves no row behind.
 - `validate-crosscheck`: The headline correctness proof. Check the vector inputs are built from stored bars and the weight schedule only, never from the engine result.
-- `validate-overfit`: The trial count and Sharpe variance must come from the registry, not from arguments.
+- `validate-overfit`: The trial count and Sharpe variance must come from the registry, not from arguments. The feed and the risk-free symbol must come from the config, and risk-free closes must be matched to equity dates by date through the one helper in `runner.rs`, not by position and not by a second copy (see Replans).
 - `live-ids`: Count the statuses against the seventeen in architecture 5.9; nothing may fall through to a default state.
 - `live-lock`: The lock must be released by the operating system if the process dies; no stale-file logic.
 - `live-context`: Every later live test builds on `tests/common/mod.rs`: check it matches the live fixture in the requirements exactly.
@@ -865,3 +865,42 @@ Rejected:
 Architecture 5.4 shows `pub struct Store { /* private */ }` and puts `impl Store` blocks in four other modules. It does not say how those modules reach the connection. That is not the cause of this replan: `pub(crate)` satisfies both statements, and the gap was in the Files of the plan. The next revision of the architecture should add one line to 5.4: the connection is `pub(crate)`, and the repository modules use it directly.
 
 The chain is one step long.
+
+### validate-overfit, replan 1: V09 was stuck
+
+V09 ("Add dsr_for_run") could not be built to its signature. R-373 asks for the Deflated Sharpe Ratio of the run's daily excess returns. The excess return needs the closes of the risk-free symbol, and `Store::bars_asof` needs a feed name to read them. Architecture 5.8 gave `dsr_for_run(store, run_id, family)`. `backtest_runs` stores the family, the trial hash, the config hash and the creation time, and nothing else. No table holds a config. So neither the feed nor the risk-free symbol could be reached.
+
+The decision was made by the orchestrator, under the owner's standing instruction to keep the run going without questions: the function takes the config, as `run_and_record` and `crosscheck` in the same crate already do.
+
+What changed:
+
+- Architecture 5.8, two signature lines: `dsr_for_run(store: &Store, cfg: &Config, run_id: i64, family: &str)` and `compare_to_benchmark(store: &Store, cfg: &Config, run_id: i64, benchmark_run_id: i64, periods_per_year: f64)`. Return types are unchanged.
+- R-375, the acceptance check: it now says which returns the two Sharpe ratios are taken on. R-373 and R-374 are unchanged.
+- V09: the Step text, `crates/validate/src/runner.rs` added to Files, and `--test metrics` added to the Proof.
+- V11: the Step text. Its Files and Proof are unchanged.
+- V10 is unchanged. No chain, After or wave changed, and no step ID was added.
+
+V09:
+
+- The feed is `cfg.data.feed` and the risk-free symbol is `cfg.strategy.risk_free_symbol`. The equity comes from `Store::backtest_equity(run_id)`, which already returns `StoreError::NotFound` for an unknown run id. The trial count and the variance of the Sharpe ratios come from `Store::trials(family)`.
+- The rule is the one `runner.rs` has had since the V03 fix: each equity date is looked up in the risk-free closes by date, and a date with no close is `ValidateError::Invalid`. Never pair the two series by position, and never drop or fill a date.
+- Today that rule is inside the private `Metrics::from_result`, which takes a `SimResult`. V09 may move it out into `pub(crate)` helpers in `runner.rs`: one that turns dated equity (`&[(NaiveDate, Decimal)]`) and the closes by date into the excess returns, and one that reads the closes of the risk-free symbol from the config's feed for a date range. `Metrics::from_result` and `run_and_record` then call them, so they are not dead code, and `overfit.rs` calls the same two. Do not write a second copy of the alignment in `overfit.rs`.
+- That is the only change allowed in `runner.rs`: a move and a visibility change. No public signature changes, and `Metrics`, the stored equity and the registered trial stay exactly as they are. `--test metrics` is in the Proof to show it; `metrics.rs` is a committed test of `validate-backtest` (V03) and is not edited.
+- The closes are read from the first to the last equity date, with `Adjustment::All` and no as-of cut, as `run_and_record` reads them.
+- `sr` in the report is the per-period Sharpe ratio of those excess returns, the same quantity `run_and_record` registers for the trial.
+- Tests call `dsr_for_run(&store, &cfg, run_id, family)` with `common::config()` or a variation of it. Any V09 test written against the three-argument signature is replaced.
+
+Not checked, and why: nothing compares the config passed in with the one the run was made with. `backtest_runs` has a `config_hash` column, but architecture 5.4 gives the store no method that reads it. A caller that passes a config with another feed or another risk-free symbol gets the excess returns of that config. If that feed has no close for an equity date, the call fails with `Invalid`; otherwise it does not. The command line passes the one loaded config to both the backtest and the statistic, so this arises only when the config file is edited between the two. The next revision of the architecture could add a reader for the stored hash and a check here.
+
+V10 was checked and is not affected. R-374 defines the matrix as the daily returns of the stored runs over their common dates and compares the result with `pbo_cscv` on that matrix. Stored equity is enough; no bar is read.
+
+V11 was checked and has the same gap, by decision D-29: research Sharpe ratios are on returns in excess of the risk-free proxy. `BenchmarkReport` carries two Sharpe ratios, and with no config they could only be taken on plain returns. They would then disagree with `metrics.sharpe` of `backtest run` for the same run id. R-375 said "both annualised Sharpe ratios" and did not say of which returns, and the tester writes from that column alone. So the same pattern is applied before the step is built:
+
+- `compare_to_benchmark` takes the config. Each Sharpe ratio is `annualized_sharpe` of that run's excess returns over the dates both runs share, built with the helpers V09 leaves in `runner.rs`. A missing risk-free close on a common date is `ValidateError::Invalid`.
+- The regression is unchanged: `ols` of the plain daily returns of the strategy on those of the benchmark, as R-375 has always read.
+- V11 calls the `pub(crate)` helpers and does not need `runner.rs` in its Files.
+
+Other chains:
+
+- `cli-validate` (R16, R18) calls these two functions with the config the command line has already loaded. Its rows, R-391 and R-392 are unchanged: every command reads `--config`, and a step builds to the signatures of architecture 5.8 as they stand when it starts.
+- `validate-crosscheck` shares the wave and does not list `runner.rs`. `validate-backtest`, which owns `runner.rs`, is under After for this chain, so the two never run at once.

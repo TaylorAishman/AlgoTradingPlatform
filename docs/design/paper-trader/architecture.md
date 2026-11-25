@@ -802,10 +802,10 @@ pub fn crosscheck(store: &Store, cfg: &Config, req: &BacktestRequest, zero_cost:
     -> Result<CrossCheck, ValidateError>;
 // overfit.rs
 pub struct DsrReport { pub dsr: f64, pub sr: f64, pub sr0: f64, pub n_trials: u32, pub skew: f64, pub kurt: f64, pub t: usize }
-pub fn dsr_for_run(store: &Store, run_id: i64, family: &str) -> Result<DsrReport, ValidateError>;
+pub fn dsr_for_run(store: &Store, cfg: &Config, run_id: i64, family: &str) -> Result<DsrReport, ValidateError>;
 pub fn pbo_for_runs(store: &Store, run_ids: &[i64], s: usize) -> Result<PboResult, ValidateError>;
 pub struct BenchmarkReport { pub strategy_sharpe: f64, pub benchmark_sharpe: f64, pub ols: Ols }
-pub fn compare_to_benchmark(store: &Store, run_id: i64, benchmark_run_id: i64, periods_per_year: f64)
+pub fn compare_to_benchmark(store: &Store, cfg: &Config, run_id: i64, benchmark_run_id: i64, periods_per_year: f64)
     -> Result<BenchmarkReport, ValidateError>;
 
 // pt-live
