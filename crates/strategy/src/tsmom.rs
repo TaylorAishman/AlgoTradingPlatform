@@ -79,7 +79,7 @@ impl Strategy for Tsmom {
             let mut missing = None;
             for &months in &self.params.lookback_months {
                 let Some(anchor) = self.calendar.month_end_back(asof, months) else {
-                    missing = Some(format!("no session {months} months back"));
+                    missing = Some("insufficient_history".to_string());
                     break;
                 };
                 let (Some(now), Some(then), Some(rf_then)) = (
@@ -87,7 +87,7 @@ impl Strategy for Tsmom {
                     close_on(view, symbol, anchor),
                     close_on(view, rf, anchor),
                 ) else {
-                    missing = Some(format!("no price on {anchor}"));
+                    missing = Some("insufficient_history".to_string());
                     break;
                 };
                 let excess = (now / then - 1.0) - (rf_now / rf_then - 1.0);
