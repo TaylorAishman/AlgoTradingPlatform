@@ -1,1 +1,74 @@
+//! Fidelity metrics: how closely paper trading follows its replay and its shadow.
 
+use crate::error::ShadowError;
+use crate::replay::replay_decision;
+use pt_config::config::Config;
+use pt_store::db::Store;
+use pt_store::trading::Mode;
+use pt_strategy::strategy::Strategy;
+
+/// Counts and means summarising paper trading against its shadow simulation.
+#[derive(Debug, Clone, PartialEq)]
+pub struct Fidelity {
+    /// Sessions with a stored shadow comparison.
+    pub n_sessions: usize,
+    /// Paper decisions (rebalances).
+    pub n_rebalances: usize,
+    /// Fills received from the broker.
+    pub n_fills: usize,
+    /// Paper decisions whose replay differs from what was stored.
+    pub replay_mismatches: usize,
+    /// Reconciliation and foreign-order halts, cleared or not.
+    pub reconciliation_breaks: usize,
+    /// Mean slippage over recorded orders, in basis points.
+    pub mean_slippage_bps: f64,
+    /// Mean of paper return minus shadow return, in basis points.
+    pub mean_diff_bps: f64,
+    /// Largest absolute paper-minus-shadow return, in basis points.
+    pub max_abs_diff_bps: f64,
+}
+
+fn mean(values: &[f64]) -> f64 {
+    if values.is_empty() {
+        0.0
+    } else {
+        values.iter().sum::<f64>() / values.len() as f64
+    }
+}
+
+/// Summarises the stored paper, shadow and slippage records. Each paper
+/// decision is replayed with `replay_decision`.
+pub fn fidelity(
+    store: &Store,
+    cfg: &Config,
+    strategy: &dyn Strategy,
+) -> Result<Fidelity, ShadowError> {
+    let days = store.shadow_days()?;
+    let diffs: Vec<f64> = days.iter().map(|d| d.diff * 10_000.0).collect();
+    let slippage: Vec<f64> = store.slippage_rows()?.iter().map(|r| r.bps).collect();
+
+    let decisions = store.decisions(Mode::Paper)?;
+    let mut replay_mismatches = 0;
+    for row in &decisions {
+        if !replay_decision(store, cfg, strategy, row.id)?.matches {
+            replay_mismatches += 1;
+        }
+    }
+
+    let reconciliation_breaks = store
+        .halts()?
+        .iter()
+        .filter(|h| h.reason.starts_with("reconciliation") || h.reason == "foreign_order")
+        .count();
+
+    Ok(Fidelity {
+        n_sessions: days.len(),
+        n_rebalances: decisions.len(),
+        n_fills: store.fills()?.len(),
+        replay_mismatches,
+        reconciliation_breaks,
+        mean_slippage_bps: mean(&slippage),
+        mean_diff_bps: mean(&diffs),
+        max_abs_diff_bps: diffs.iter().fold(0.0, |m, d| f64::max(m, d.abs())),
+    })
+}
