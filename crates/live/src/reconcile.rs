@@ -1,5 +1,7 @@
 //! Reconciliation of the local paper book against the broker account.
 
+use std::collections::BTreeMap;
+
 use chrono::{DateTime, Utc};
 use pt_alpaca::{account, orders_read, reference};
 use pt_ops::alert::Level;
@@ -77,6 +79,31 @@ pub fn reconcile(ctx: &LiveContext<'_>) -> Result<ReconcileReport, LiveError> {
     if !foreign.is_empty() {
         let detail = foreign.join(", ");
         return halt(ctx, "foreign_order", &detail);
+    }
+    let mut local: BTreeMap<String, i64> = ctx
+        .store
+        .positions(Book::Paper)?
+        .into_iter()
+        .map(|(s, q)| (s.as_str().to_string(), q))
+        .collect();
+    let mut broker: BTreeMap<String, i64> = BTreeMap::new();
+    for p in account::positions(ctx.http)? {
+        *broker.entry(p.symbol).or_insert(0) += p.qty;
+    }
+    let mut symbols: Vec<String> = local.keys().chain(broker.keys()).cloned().collect();
+    symbols.sort();
+    symbols.dedup();
+    let breaks: Vec<String> = symbols
+        .iter()
+        .filter_map(|s| {
+            let l = local.remove(s).unwrap_or(0);
+            let b = broker.get(s).copied().unwrap_or(0);
+            (l != b).then(|| format!("{s}: broker {b}, ledger {l}"))
+        })
+        .collect();
+    if !breaks.is_empty() {
+        let detail = breaks.join("; ");
+        return halt(ctx, "reconciliation_position", &detail);
     }
     Ok(ReconcileReport {
         clean: true,
