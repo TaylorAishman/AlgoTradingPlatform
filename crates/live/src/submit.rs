@@ -16,6 +16,7 @@ use pt_store::trading::OrderRow;
 
 use crate::context::LiveContext;
 use crate::error::LiveError;
+use crate::settle::leg1_filled;
 use crate::snapshot::expected_last_session;
 
 /// What one call of [`submit_planned`] did.
@@ -38,7 +39,12 @@ pub fn submit_planned(ctx: &LiveContext, auth: &AuthContext) -> Result<SubmitRep
     let mut report = SubmitReport::default();
     // Fetched once, after the first gate check, so no network call precedes it.
     let mut oldest_live: Option<NaiveDate> = None;
+    let filled = ctx.store.orders_in_states(&[OrderState::Filled])?;
     for row in ctx.store.orders_in_states(&[OrderState::Intent])? {
+        if row.leg == 2 && !leg1_filled(&row, &filled) {
+            // An opening leg waits for its closing leg to fill (R-292).
+            continue;
+        }
         let order = new_order(&row);
         let permit = ctx.gate.authorize(&summary(&order), auth)?;
         if oldest_live.is_none() {

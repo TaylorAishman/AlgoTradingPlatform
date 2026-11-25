@@ -22,6 +22,8 @@ use crate::status::map_status;
 pub struct SettleReport {
     pub orders_updated: usize,
     pub fills_recorded: usize,
+    /// Opening (leg 2) intents whose closing leg 1 is seen `Filled`.
+    pub legs_released: usize,
 }
 
 /// Asks the broker about every open (`Submitted` or `PartiallyFilled`) order,
@@ -41,6 +43,7 @@ pub fn settle(ctx: &LiveContext) -> Result<SettleReport, LiveError> {
     let open = [OrderState::Submitted, OrderState::PartiallyFilled];
     let rows = ctx.store.orders_in_states(&open)?;
     let Some(earliest) = rows.iter().map(|r| r.trade_date).min() else {
+        report.legs_released = released_legs(ctx)?;
         return Ok(report);
     };
     let after = Utc.from_utc_datetime(&earliest.and_time(NaiveTime::MIN));
@@ -99,7 +102,26 @@ pub fn settle(ctx: &LiveContext) -> Result<SettleReport, LiveError> {
         )?;
         report.orders_updated += 1;
     }
+    report.legs_released = released_legs(ctx)?;
     Ok(report)
+}
+
+/// Counts the leg-2 intents whose leg 1 (same decision and symbol) is `Filled`.
+fn released_legs(ctx: &LiveContext) -> Result<usize, LiveError> {
+    let filled = ctx.store.orders_in_states(&[OrderState::Filled])?;
+    let intents = ctx.store.orders_in_states(&[OrderState::Intent])?;
+    Ok(intents
+        .iter()
+        .filter(|o| o.leg == 2 && leg1_filled(o, &filled))
+        .count())
+}
+
+/// True when `filled` holds the leg 1 of `leg2`'s decision and symbol.
+pub(crate) fn leg1_filled(leg2: &OrderRow, filled: &[OrderRow]) -> bool {
+    leg2.decision_id.is_some()
+        && filled
+            .iter()
+            .any(|o| o.leg == 1 && o.decision_id == leg2.decision_id && o.symbol == leg2.symbol)
 }
 
 /// The state and filled quantity the stored fills support. The broker claims
