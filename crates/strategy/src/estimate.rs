@@ -23,7 +23,8 @@ pub struct VolParams {
 /// Uses at most the last `max_obs` returns. A symbol with fewer than
 /// `min_obs` returns is ineligible with reason `insufficient_history`. A
 /// symbol missing a session that another symbol has inside the shared window
-/// is ineligible with reason `gap`; zero volatility gives `zero_vol`.
+/// is ineligible with reason `gap`; non-finite volatility gives
+/// `non_finite`; zero volatility gives `zero_vol`.
 /// `cov` holds every ordered pair of eligible symbols over the same returns.
 pub fn estimate_risk(
     symbols: &[Symbol],
@@ -63,6 +64,9 @@ pub fn estimate_risk(
             }
             Some(_) if has_gap => {
                 risk.ineligible.insert(s.clone(), "gap".to_string());
+            }
+            Some(v) if !v.is_finite() => {
+                risk.ineligible.insert(s.clone(), "non_finite".to_string());
             }
             Some(v) if v <= 0.0 => {
                 risk.ineligible.insert(s.clone(), "zero_vol".to_string());
