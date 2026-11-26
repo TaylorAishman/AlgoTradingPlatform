@@ -1,6 +1,6 @@
 # paper-trader: requirement gaps found during the build
 
-Reviewers and testers found these while building waves 1 to 4. Each is behaviour that `requirements.md` does not pin down, so the code does something reasonable but untested, or something that may not be what we want. Resolve them after the current `/devteam:auto` run by adding or amending requirements and re-planning the affected chains.
+Reviewers and testers found these while building the waves. Waves 1 to 4 are in the first tables; waves 5 to 9 are in their own section at the end. Each is behaviour that `requirements.md` does not pin down, so the code does something reasonable but untested, or something that may not be what we want. Resolve them after the current `/devteam:auto` run by adding or amending requirements and re-planning the affected chains.
 
 Each entry gives the area, what is unspecified, what the code does today, and a suggested direction. "Decide" means a human choice is needed.
 
@@ -69,3 +69,67 @@ Each entry gives the area, what is unspecified, what the code does today, and a 
 - Several steps landed as test-only commits because an earlier step had already implemented them (H07, H09, H12, H13, K13, K16, K18, D09, G05). H08 and K13 overreached their step's scope.
 - C14 and C13 fixture changes.
 - The remote `integration/paper-trader` is stale. Each integration rebuilds it from `main`, so pushing it would need a force push, which the workflow forbids.
+
+## Found in waves 5 to 9
+
+These came from reviewers, testers and implementers while building waves 5 to 9 (ops, live, shadow, validate and cli chains).
+
+### Needs a decision
+
+| # | Area | Gap | Today | Suggested |
+|---|------|-----|-------|-----------|
+| G-50 | ops-report | Shape of `status.json` | Fields chosen by the implementer; no requirement pins the keys | Fix the schema in a requirement so cli-ops and any dashboard can rely on it |
+| G-51 | live-rebalance (O29) | Id of a dry-run order | Prefixed `dry-` so it can never collide with a real client order id | Confirm, and state it in R-30x |
+| G-52 | live-rebalance | `FirstOrder` stage | `rebalance` treats it like Paper (`dry` depends on the stage only) | live-cycle must exclude rebalancing in FirstOrder (R-319); confirm and test there |
+| G-53 | gate / live-killswitch | `flatten` in the `FirstOrder` stage | The gate refuses every order except the approved first order, so the kill switch cannot flatten in that stage | Decide whether risk-reducing kill-switch orders bypass the first-order rule |
+| G-54 | live-killswitch (O46) | Return value of `flatten` | Counts orders sent and accepted by this call; rejected and adopted orders are not counted, and only an `order_rejected` alert signals a partial failure | Decide what the CLI reports; cli-ops should surface the alerts |
+| G-55 | live-killswitch (O46) | A stored Rejected row whose order the broker still holds | Not looked up before a retry, so a second order could be sent under `-r1` (needs the broker to reject and keep the order) | Look up the spent id before taking a retry id, if it is worth one extra request |
+| G-56 | live-legs (O16) | Leg 1 that ends Expired or Canceled after a partial fill | Leg 2 is neither released nor abandoned and stays `Intent` forever | Decide: abandon, release for the filled part, or alert |
+| G-57 | live-rebalance-timing (O31) | What counts as "the first paper rebalance" | `decisions(mode).is_empty()`: a skipped_late row counts as a prior decision, and DryRun mode gets its own exemption | Confirm R-306 means this |
+| G-58 | live-rebalance-timing (O30) | A late rebalance whose bars are missing | Returns DataNotReady; it is skipped as late on a later call once data arrives | Confirm |
+| G-59 | live-rebalance-timing (O33) | Level of the `not_tradable` alert, and alerts on a skipped_late decision | Warn; a skipped_late decision writes no `not_tradable` alerts | Confirm R-308 |
+| G-60 | cli-backtest (R13) | Initial capital and strategy choice | Capital hard-coded to 100000; strategy defaults to `tsmom`. Architecture 5.8 lists a `--capital` flag that `cli.rs` does not have | Add `--capital` (or a config field) and a requirement for it |
+| G-61 | validate (V07, V10) | Borrow cost on the last session, and which dates enter the return comparison | Last-session borrow day is ambiguous; returns are compared on common dates only | State both in requirements |
+| G-62 | validate-overfit | DSR and benchmark config vs the stored run | The config passed in is not checked against the run's stored `config_hash` | Decide whether a mismatch is an error |
+| G-63 | architecture 5.4 | `Store::backtest_family` (D27, cli-validate replan 1) | Added by a replan; not listed in architecture 5.4 | Add the line at the next architecture revision |
+
+### Missing behaviour (add a requirement and a test)
+
+| # | Area | Gap | Today |
+|---|------|-----|-------|
+| G-70 | ops-report | Timestamp used for the pre-open status | Not pinned by a test |
+| G-71 | live-snapshots | Anchor of "five sessions" | Not pinned by a test |
+| G-72 | live-reconcile (O09) | Alert level for reconciliation breaks | Warn, because there is no Error level |
+| G-73 | live-reconcile (O09) | Which broker errors count as Rejected | Catches Rejected too broadly, including 401 and 403 |
+| G-74 | live-reconcile (O08) | Staleness check | Can be silently disabled by config |
+| G-75 | live-submit (O12) | Fill and ledger entry | Not written atomically; a re-add fallback covers a crash between them |
+| G-76 | live-rebalance (O27) | Decision row and its orders | Not written atomically; a backfill from `outputs_json` covers a crash between them |
+| G-77 | live-rebalance (O26) | `data_asof` vs the fixture's bar time | They differ in the tests; confirm which instant is stored |
+| G-78 | live-rebalance | An asset with no stored snapshot | Silently dropped from the universe, with no alert |
+| G-79 | live-settle (O19, O20) | Incomplete-fill alert and broker paging | Alert recorded before the state change, with a mock-fix exception; paging of order lists not covered |
+| G-80 | live-legs (O15) | `legs_released` | A level count recomputed every settle, not an event count |
+| G-81 | live-killswitch (O45) | Ordering of cancel, settle and flatten | `flatten` skips a symbol whose row is still Submitted, so settle must run between `cancel_open` and `flatten` (documented, not enforced) |
+| G-82 | shadow-fidelity (P10, P11) | Counting | The last session is not counted as missed; `n_rebalances` includes skipped_late decisions |
+| G-83 | shadow-daily (P03) | Order states considered | Chosen by the implementer; not pinned by R-333 |
+| G-84 | shadow-slippage (P02) | Fixture size | Larger than the step guideline |
+| G-85 | cli-data (R08, R10, R11, R12) | Dispatch | Several steps needed small dispatch changes outside their Files |
+| G-86 | cli-validate (R16) | `validate dsr` on a benchmark run | No test shows it counts only its own family's trials |
+
+### Test-tightness follow-ups
+
+- shadow-signoff (P14): `signoff.md` format is asserted loosely (verdict word, rows by id); R-343 does not fix the layout.
+- cli-validate (R17, R18): output labels are matched loosely because R-391 and R-392 do not name them.
+- live-killswitch (O46): rejection is tested through a loopback proxy in `flatten.rs`, because `pt-mock-alpaca` has no per-route reject hook. Add one and move the test onto it.
+
+### Flaky tests
+
+- `pt-validate` `run_and_record`, and one test around c04e8fb.
+- A `pt-shadow` test failed once at P13 (c2a635e, 33.9 s) and passed on retry; not reproduced in five runs at the tip.
+- `flaky.log` often records only cargo's summary line ("0 passed; 0 failed"), not the failing test's name. `check.sh` should log the name.
+
+### Housekeeping (not requirements)
+
+- More unused manifest dependencies: `pt-live` and `pt-shadow` in `pt-cli`.
+- Duplicated code: the halt helper (`reconcile.rs` private `halt()` and `settle.rs` `halt_unexpected`); `crosscheck.rs` repeats setup from `runner.rs`; `cmd_backtest.rs` `family()` repeats strategy ids (`tsmom-v1`, `bh-volscaled-v1`); the cli `Env` and fixture helpers (about 150 lines) are copied into `validate_dsr.rs`, `validate_pbo.rs` and `validate_benchmark.rs`.
+- `check.sh` writes one shared `.devteam/state/last-check.log`; concurrent checks overwrite each other's log.
+- Process: O46 landed at 449 changed lines, over the 400-line step guideline, after review fixes (mostly test code). live-killswitch took five review rounds, two past the usual cap of three. One fix agent reported a per-commit proof that had not actually compiled (the missing `AlpacaError` import in O45).
