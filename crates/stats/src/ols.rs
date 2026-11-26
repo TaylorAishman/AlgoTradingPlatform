@@ -19,6 +19,11 @@ pub fn ols(y: &[f64], x: &[f64]) -> Result<Ols, StatsError> {
     if n < 3 || x.len() != n {
         return Err(StatsError::TooFewObservations);
     }
+    if x.iter().chain(y).any(|v| !v.is_finite()) {
+        return Err(StatsError::OutOfDomain(
+            "inputs must be finite numbers".to_string(),
+        ));
+    }
     let nf = n as f64;
     let mx = x.iter().sum::<f64>() / nf;
     let my = y.iter().sum::<f64>() / nf;

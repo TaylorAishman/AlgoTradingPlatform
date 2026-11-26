@@ -139,6 +139,11 @@ pub fn pbo_cscv(returns: &[Vec<f64>], partitions: usize) -> Result<PboResult, St
     if cols < 2 || returns.len() < 2 * partitions {
         return Err(StatsError::TooFewObservations);
     }
+    if returns.iter().flatten().any(|v| !v.is_finite()) {
+        return Err(StatsError::OutOfDomain(
+            "returns must be finite numbers".to_string(),
+        ));
+    }
     let block = returns.len() / partitions;
     let rows_used = block * partitions;
     let used = &returns[returns.len() - rows_used..];
