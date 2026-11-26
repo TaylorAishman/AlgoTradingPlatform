@@ -59,6 +59,14 @@ impl MockAlpaca {
                         }
                         _ => None,
                     };
+                    let injected = injected.or_else(|| {
+                        let r = st
+                            .reject_routes
+                            .iter_mut()
+                            .find(|r| r.0 == rec.method && r.1 == rec.path && r.2 > 0)?;
+                        r.2 -= 1;
+                        Some(r.3)
+                    });
                     let (status, text) = if let Some(code) = injected {
                         (code, r#"{"message":"injected failure"}"#.to_string())
                     } else if authed {
@@ -97,6 +105,14 @@ impl MockAlpaca {
             .lock()
             .unwrap_or_else(|e| e.into_inner())
             .account_cash = Some(cash.to_string());
+    }
+
+    /// Seed the margin multiplier served at `/v2/account` (default "2").
+    pub fn seed_account_multiplier(&self, multiplier: &str) {
+        self.state
+            .lock()
+            .unwrap_or_else(|e| e.into_inner())
+            .account_multiplier = Some(multiplier.to_string());
     }
 
     /// Set the clock served at `/v2/clock`.
@@ -289,6 +305,26 @@ impl MockAlpaca {
             .lock()
             .unwrap_or_else(|e| e.into_inner())
             .fail_next = (n > 0).then_some((n, status));
+    }
+
+    /// Refuse the next `n` requests of one route (`method` and `path`) with
+    /// `status`; they are still recorded, and other routes are served normally.
+    pub fn reject_next(&self, method: &str, path: &str, n: u32, status: u16) {
+        let mut st = self.state.lock().unwrap_or_else(|e| e.into_inner());
+        st.reject_routes.retain(|r| !(r.0 == method && r.1 == path));
+        if n > 0 {
+            st.reject_routes
+                .push((method.to_string(), path.to_string(), n, status));
+        }
+    }
+
+    /// Answer the next order POST with `status` but still hold the order, as a
+    /// broker that accepted it and then failed the response would.
+    pub fn reject_but_keep_next_order(&self, status: u16) {
+        self.state
+            .lock()
+            .unwrap_or_else(|e| e.into_inner())
+            .reject_keep = Some(status);
     }
 
     /// Every request received so far, oldest first.

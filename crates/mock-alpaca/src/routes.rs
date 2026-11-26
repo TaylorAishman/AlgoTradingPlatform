@@ -29,6 +29,11 @@ fn times_two(cash: &str) -> String {
 /// Answer a request from the seeded state; anything unseeded is 404.
 pub fn respond(req: &Recorded, state: &mut State) -> (u16, String) {
     if req.method == "POST" && req.path == "/v2/orders" {
+        if let Some(code) = state.reject_keep.take() {
+            // Hold the order as if accepted, but answer with the error.
+            submit(&req.body, state);
+            return (code, r#"{"message":"injected failure"}"#.to_string());
+        }
         return submit(&req.body, state);
     }
     if req.method == "DELETE" {
@@ -46,13 +51,14 @@ pub fn respond(req: &Recorded, state: &mut State) -> (u16, String) {
         match req.path.as_str() {
             "/v2/account" => {
                 if let Some(cash) = &state.account_cash {
+                    let multiplier = state.account_multiplier.as_deref().unwrap_or("2");
                     let body = json!({
                         "cash": cash,
                         "equity": cash,
                         "last_equity": cash,
                         "buying_power": times_two(cash),
                         "status": "ACTIVE",
-                        "multiplier": "2",
+                        "multiplier": multiplier,
                         "shorting_enabled": true,
                         "trading_blocked": false,
                         "account_blocked": false,
