@@ -3,10 +3,16 @@
 //! The stage gate is checked first, so a run in the backtest stage is refused
 //! before any request goes to the broker.
 
+use pt_alpaca::reference::clock;
+use pt_config::hash::config_hash;
+use pt_data::ingest::ingest;
+use pt_data::reference::{sync_assets, sync_calendar};
 use pt_gate::gate::Capability;
+use pt_gate::owner::Stage;
 
 use crate::context::LiveContext;
 use crate::error::LiveError;
+use crate::snapshot::{expected_last_session, trade_session};
 
 /// How a run ended.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -26,11 +32,76 @@ pub struct RunOutcome {
 }
 
 /// Run one daily cycle. Refuses the backtest stage before any broker request.
+///
+/// The run is logged from its start. The read-only phases run in every stage
+/// that gets past the gate; the phases that write are added after them by the
+/// stages that allow them.
 pub fn run_cycle(ctx: &LiveContext) -> Result<RunOutcome, LiveError> {
     ctx.gate.allows(Capability::TradingRead)?;
+    let stage = stage_name(ctx.gate.stage());
+    let run_id = ctx.store.start_run(
+        stage,
+        &config_hash(ctx.cfg),
+        ctx.code_version,
+        ctx.clock.now_utc(),
+    )?;
+
+    let mut phases: Vec<String> = Vec::new();
+    let status = RunStatus::Ok;
+    read_only_phases(ctx, &mut phases)?;
+
+    ctx.store.finish_run(
+        run_id,
+        status_name(status),
+        &phases.join(","),
+        ctx.clock.now_utc(),
+    )?;
     Ok(RunOutcome {
-        run_id: 0,
-        status: RunStatus::Ok,
-        phases: Vec::new(),
+        run_id,
+        status,
+        phases,
     })
+}
+
+/// The phases that only read: the calendar, bars through the last session that
+/// must be complete, and the asset flags. Each is pushed once it has finished.
+fn read_only_phases(ctx: &LiveContext, phases: &mut Vec<String>) -> Result<(), LiveError> {
+    let wire_clock = clock(ctx.http)?;
+
+    sync_calendar(
+        ctx.store,
+        ctx.http,
+        ctx.cfg.data.start,
+        trade_session(&wire_clock),
+    )?;
+    phases.push("calendar".to_string());
+
+    let calendar = ctx.store.calendar()?;
+    let through = expected_last_session(&wire_clock, &calendar)
+        .ok_or_else(|| LiveError::Invalid("no session before the trade session".to_string()))?;
+    ingest(ctx.store, ctx.http, ctx.cfg, through, ctx.clock.now_utc())?;
+    phases.push("ingest".to_string());
+
+    sync_assets(ctx.store, ctx.http, ctx.cfg, ctx.clock.now_utc())?;
+    phases.push("assets".to_string());
+    Ok(())
+}
+
+fn stage_name(stage: Stage) -> &'static str {
+    match stage {
+        Stage::Backtest => "backtest",
+        Stage::Ingest => "ingest",
+        Stage::DryRun => "dry_run",
+        Stage::FirstOrder => "first_order",
+        Stage::Paper => "paper",
+    }
+}
+
+fn status_name(status: RunStatus) -> &'static str {
+    match status {
+        RunStatus::Ok => "ok",
+        RunStatus::Halted => "halted",
+        RunStatus::DataNotReady => "data_not_ready",
+        RunStatus::Failed => "failed",
+    }
 }
