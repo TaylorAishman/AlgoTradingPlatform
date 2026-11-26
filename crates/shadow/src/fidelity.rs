@@ -13,7 +13,8 @@ use pt_strategy::strategy::Strategy;
 pub struct Fidelity {
     /// Sessions with a stored shadow comparison.
     pub n_sessions: usize,
-    /// Paper decisions (rebalances).
+    /// Paper decisions with status planned (rebalances). Skipped-late
+    /// decisions are not counted.
     pub n_rebalances: usize,
     /// Fills received from the broker.
     pub n_fills: usize,
@@ -96,7 +97,7 @@ pub fn fidelity(
 
     Ok(Fidelity {
         n_sessions: days.len(),
-        n_rebalances: decisions.len(),
+        n_rebalances: decisions.iter().filter(|r| r.status == "planned").count(),
         n_fills: store.fills()?.len(),
         replay_mismatches,
         reconciliation_breaks,
