@@ -37,7 +37,7 @@ pub struct AuthContext {
 }
 
 /// Proof that the gate authorised exactly one order. Only `Gate::authorize`
-/// can create one: the field is private and there is no public constructor.
+/// and `Gate::authorize_kill_switch` can create one: the field is private and there is no public constructor.
 ///
 /// R-265: a struct literal written outside this crate does not compile, because
 /// the field is private.
@@ -144,6 +144,32 @@ impl Gate {
         // risk-reducing. The flag is the only proof the gate accepts.
         if ctx.halted && !ctx.risk_reducing {
             return Err(GateError::Halted);
+        }
+        Ok(OrderPermit {
+            order: order.clone(),
+        })
+    }
+
+    /// R-469, R-470 (decision G-53): authorise one kill-switch order. Allowed in
+    /// every stage, with no flat confirmation, allowlist or halt check, because
+    /// it can only reduce risk. Fails closed: the order must be a `pt-flatten-`
+    /// order whose side is opposite to `broker_position` and whose quantity is
+    /// between 1 and the absolute position.
+    pub fn authorize_kill_switch(
+        &self,
+        order: &OrderSummary,
+        broker_position: i64,
+    ) -> Result<OrderPermit, GateError> {
+        let reducing = order.client_order_id.starts_with("pt-flatten-")
+            && order.qty >= 1
+            && order.qty <= broker_position.unsigned_abs()
+            && match order.side.as_str() {
+                "sell" => broker_position > 0,
+                "buy" => broker_position < 0,
+                _ => false,
+            };
+        if !reducing {
+            return Err(GateError::NotRiskReducing);
         }
         Ok(OrderPermit {
             order: order.clone(),
