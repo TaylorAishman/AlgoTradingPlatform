@@ -18,6 +18,19 @@ pub enum Stage {
     Paper,
 }
 
+impl Stage {
+    /// The stage's name, the same text serde writes.
+    pub fn as_str(self) -> &'static str {
+        match self {
+            Stage::Backtest => "backtest",
+            Stage::Ingest => "ingest",
+            Stage::DryRun => "dry_run",
+            Stage::FirstOrder => "first_order",
+            Stage::Paper => "paper",
+        }
+    }
+}
+
 /// The owner's approval of one first order.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct FirstOrderApproval {
