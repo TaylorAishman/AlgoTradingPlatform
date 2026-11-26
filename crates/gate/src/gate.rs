@@ -94,19 +94,18 @@ impl Gate {
     }
 
     /// Whether the current stage allows `cap`. Fails closed: only entries in the
-    /// stage table are allowed.
+    /// stage table are allowed. Cancelling is the kill switch, so every stage
+    /// allows it (R-263, R-321).
     pub fn allows(&self, cap: Capability) -> Result<(), GateError> {
         let allowed = match (self.owner.stage, cap) {
+            (_, Capability::CancelOrder) => true,
             (Stage::Backtest, _) => false,
             (
                 Stage::Ingest | Stage::DryRun | Stage::FirstOrder | Stage::Paper,
                 Capability::MarketDataRead | Capability::TradingRead,
             ) => true,
             (Stage::DryRun | Stage::FirstOrder | Stage::Paper, Capability::RecordDryRun) => true,
-            (
-                Stage::FirstOrder | Stage::Paper,
-                Capability::SubmitOrder | Capability::CancelOrder,
-            ) => true,
+            (Stage::FirstOrder | Stage::Paper, Capability::SubmitOrder) => true,
             _ => false,
         };
         if allowed {
