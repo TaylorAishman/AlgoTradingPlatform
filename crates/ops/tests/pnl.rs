@@ -27,10 +27,10 @@ fn day_mtd_ytd_inception_match_the_worked_example() {
         (d(2026, 2, 27), "101505"),
     ]);
     let p = pnl(&s, d(2026, 2, 27)).expect("snapshot exists for the date");
-    assert_eq!(p.day.round_dp(6), dec("0.005"));
-    assert_eq!(p.mtd.round_dp(6), dec("-0.004853"));
-    assert_eq!(p.ytd.round_dp(6), dec("0.01505"));
-    assert_eq!(p.inception.round_dp(6), dec("0.01505"));
+    assert_eq!(p.day.map(|v| v.round_dp(6)), Some(dec("0.005")));
+    assert_eq!(p.mtd.map(|v| v.round_dp(6)), Some(dec("-0.004853")));
+    assert_eq!(p.ytd.map(|v| v.round_dp(6)), Some(dec("0.01505")));
+    assert_eq!(p.inception.map(|v| v.round_dp(6)), Some(dec("0.01505")));
 }
 
 // R-355: month-to-date is measured from the last snapshot of the previous month.
@@ -43,7 +43,7 @@ fn mtd_uses_last_snapshot_of_previous_month() {
         (d(2026, 2, 3), "110"),
     ]);
     let p = pnl(&s, d(2026, 2, 3)).unwrap();
-    assert_eq!(p.mtd.round_dp(6), dec("0.1"));
+    assert_eq!(p.mtd.map(|v| v.round_dp(6)), Some(dec("0.1")));
 }
 
 // R-355: year-to-date is measured from the last snapshot of the previous year.
@@ -56,8 +56,8 @@ fn ytd_uses_last_snapshot_of_previous_year() {
         (d(2026, 3, 2), "130"),
     ]);
     let p = pnl(&s, d(2026, 3, 2)).unwrap();
-    assert_eq!(p.ytd.round_dp(6), dec("0.3"));
-    assert_eq!(p.inception.round_dp(6), dec("1.6"));
+    assert_eq!(p.ytd.map(|v| v.round_dp(6)), Some(dec("0.3")));
+    assert_eq!(p.inception.map(|v| v.round_dp(6)), Some(dec("1.6")));
 }
 
 // R-355: with no snapshot in the previous month or year, both use the first snapshot.
@@ -65,10 +65,10 @@ fn ytd_uses_last_snapshot_of_previous_year() {
 fn mtd_and_ytd_fall_back_to_first_snapshot() {
     let s = series(&[(d(2026, 2, 2), "100"), (d(2026, 2, 3), "110")]);
     let p = pnl(&s, d(2026, 2, 3)).unwrap();
-    assert_eq!(p.mtd.round_dp(6), dec("0.1"));
-    assert_eq!(p.ytd.round_dp(6), dec("0.1"));
-    assert_eq!(p.inception.round_dp(6), dec("0.1"));
-    assert_eq!(p.day.round_dp(6), dec("0.1"));
+    assert_eq!(p.mtd.map(|v| v.round_dp(6)), Some(dec("0.1")));
+    assert_eq!(p.ytd.map(|v| v.round_dp(6)), Some(dec("0.1")));
+    assert_eq!(p.inception.map(|v| v.round_dp(6)), Some(dec("0.1")));
+    assert_eq!(p.day.map(|v| v.round_dp(6)), Some(dec("0.1")));
 }
 
 // R-355: the report is for the asked date, not the latest snapshot.
@@ -80,6 +80,6 @@ fn asof_in_the_middle_of_the_series_ignores_later_snapshots() {
         (d(2026, 2, 4), "50"),
     ]);
     let p = pnl(&s, d(2026, 2, 3)).unwrap();
-    assert_eq!(p.day.round_dp(6), dec("0.1"));
-    assert_eq!(p.inception.round_dp(6), dec("0.1"));
+    assert_eq!(p.day.map(|v| v.round_dp(6)), Some(dec("0.1")));
+    assert_eq!(p.inception.map(|v| v.round_dp(6)), Some(dec("0.1")));
 }

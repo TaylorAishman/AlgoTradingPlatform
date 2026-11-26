@@ -6,15 +6,15 @@ use rust_decimal::Decimal;
 /// Returns over the day, month to date, year to date and since inception.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub struct Pnl {
-    pub day: Decimal,
-    pub mtd: Decimal,
-    pub ytd: Decimal,
-    pub inception: Decimal,
+    pub day: Option<Decimal>,
+    pub mtd: Option<Decimal>,
+    pub ytd: Option<Decimal>,
+    pub inception: Option<Decimal>,
 }
 
-fn ret(base: Decimal, now: Decimal) -> Decimal {
-    now.checked_div(base)
-        .map_or(Decimal::ZERO, |r| r - Decimal::ONE)
+/// Return over a base, or `None` when the base equity is zero.
+fn ret(base: Decimal, now: Decimal) -> Option<Decimal> {
+    now.checked_div(base).map(|r| r - Decimal::ONE)
 }
 
 /// Compute the returns as of `asof` from `(date, equity)` snapshots sorted by date.
