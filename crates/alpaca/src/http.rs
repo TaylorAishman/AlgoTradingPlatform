@@ -70,6 +70,11 @@ impl HttpClient {
         }
     }
 
+    /// Wait `d` through the client's sleeper, so tests never really wait.
+    pub fn sleep(&self, d: Duration) {
+        self.sleeper.sleep(d);
+    }
+
     /// The configured endpoints.
     pub fn endpoints(&self) -> &Endpoints {
         &self.endpoints
