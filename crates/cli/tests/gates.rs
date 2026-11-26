@@ -104,3 +104,148 @@ fn gates_is_listed_by_the_shared_helper_environment_without_keys() {
     let out = trader(&["gates"]);
     assert_eq!(out.status.code(), Some(0), "stderr: {}", stderr(&out));
 }
+
+/// Runs `trader --config <cfg> gates` with only the given extra variables.
+fn gates_with(
+    cfg: &std::path::Path,
+    home: &std::path::Path,
+    vars: &[(&str, &std::path::Path)],
+) -> Output {
+    let mut cmd = Command::new(env!("CARGO_BIN_EXE_trader"));
+    cmd.arg("--config")
+        .arg(cfg)
+        .arg("gates")
+        .current_dir(env!("CARGO_MANIFEST_DIR"))
+        .env("HOME", home)
+        .env_remove("PT_CONFIG")
+        .env_remove("PT_SECRETS_FILE")
+        .env_remove("APCA_API_KEY_ID")
+        .env_remove("APCA_API_SECRET_KEY")
+        .env_remove("PT_OWNER_FILE");
+    for (k, v) in vars {
+        cmd.env(k, v);
+    }
+    cmd.output().unwrap()
+}
+
+/// A config with one symbol whose store lives in `dir`.
+fn write_config(dir: &std::path::Path) -> std::path::PathBuf {
+    let cfg = dir.join("cfg.toml");
+    std::fs::write(
+        &cfg,
+        format!(
+            "[[universe]]\nsymbol = \"S1\"\nasset_class = \"equity\"\nshortable = true\n\n\
+             [data]\nfeed = \"csv:synth\"\n\n[run]\ndb_path = \"{}\"\noutput_dir = \"{}\"\n",
+            dir.join("store.sqlite").display(),
+            dir.join("reports").display()
+        ),
+    )
+    .unwrap();
+    cfg
+}
+
+fn trader_in(
+    dir: &std::path::Path,
+    home: &std::path::Path,
+    cfg: &std::path::Path,
+    args: &[&str],
+) -> Output {
+    Command::new(env!("CARGO_BIN_EXE_trader"))
+        .arg("--config")
+        .arg(cfg)
+        .args(args)
+        .current_dir(dir)
+        .env("HOME", home)
+        .env_remove("PT_CONFIG")
+        .env_remove("PT_SECRETS_FILE")
+        .env_remove("APCA_API_KEY_ID")
+        .env_remove("APCA_API_SECRET_KEY")
+        .env_remove("PT_OWNER_FILE")
+        .output()
+        .unwrap()
+}
+
+#[test]
+fn keys_from_a_secrets_file_mark_the_keys_line_done() {
+    // G-23: `PT_SECRETS_FILE` is accepted by every command that loads keys,
+    // so the checklist must count it too.
+    let home = tempfile::tempdir().unwrap();
+    let dir = tempfile::tempdir().unwrap();
+    let cfg = write_config(dir.path());
+    let keys = dir.path().join("keys.toml");
+    std::fs::write(
+        &keys,
+        "key_id = \"fake-id\"\nsecret_key = \"fake-secret\"\n",
+    )
+    .unwrap();
+    #[cfg(unix)]
+    {
+        use std::os::unix::fs::PermissionsExt;
+        std::fs::set_permissions(&keys, std::fs::Permissions::from_mode(0o600)).unwrap();
+    }
+    let out = gates_with(&cfg, home.path(), &[("PT_SECRETS_FILE", &keys)]);
+    assert_eq!(out.status.code(), Some(0), "stderr: {}", stderr(&out));
+    let text = stdout(&out);
+    let line = line_for(&text, "api_keys");
+    assert!(line.contains("done"), "line: {line}");
+    assert!(!text.contains("fake-secret") && !stderr(&out).contains("fake-secret"));
+}
+
+#[test]
+fn a_store_with_a_calendar_and_bars_marks_both_lines_done() {
+    // The checklist reads the store named by the config, offline.
+    let home = tempfile::tempdir().unwrap();
+    let dir = tempfile::tempdir().unwrap();
+    let cfg = write_config(dir.path());
+    let cal = dir.path().join("cal.csv");
+    std::fs::write(&cal, "date\n2024-01-02\n2024-01-03\n").unwrap();
+    let bars = dir.path().join("bars.csv");
+    std::fs::write(
+        &bars,
+        "symbol,date,open,high,low,close,volume\n\
+         S1,2024-01-02,10.00,10.50,9.90,10.20,1000\n\
+         S1,2024-01-03,10.20,10.40,10.00,10.30,1000\n",
+    )
+    .unwrap();
+    for args in [
+        vec!["calendar", "import", "--csv", cal.to_str().unwrap()],
+        vec![
+            "data",
+            "import-csv",
+            "--csv",
+            bars.to_str().unwrap(),
+            "--adjustment",
+            "raw",
+            "--source",
+            "synth",
+        ],
+    ] {
+        let out = trader_in(dir.path(), home.path(), &cfg, &args);
+        assert_eq!(out.status.code(), Some(0), "{args:?}: {}", stderr(&out));
+    }
+    let out = gates_with(&cfg, home.path(), &[]);
+    assert_eq!(out.status.code(), Some(0), "stderr: {}", stderr(&out));
+    let text = stdout(&out);
+    for id in ["calendar", "bars"] {
+        let line = line_for(&text, &format!("{id}:"));
+        assert!(line.contains("done"), "line: {line}");
+    }
+}
+
+#[test]
+fn a_config_whose_store_does_not_exist_leaves_both_pending_and_creates_nothing() {
+    let home = tempfile::tempdir().unwrap();
+    let dir = tempfile::tempdir().unwrap();
+    let cfg = write_config(dir.path());
+    let out = gates_with(&cfg, home.path(), &[]);
+    assert_eq!(out.status.code(), Some(0), "stderr: {}", stderr(&out));
+    let text = stdout(&out);
+    for id in ["calendar", "bars"] {
+        let line = line_for(&text, &format!("{id}:"));
+        assert!(line.contains("pending"), "line: {line}");
+    }
+    assert!(
+        !dir.path().join("store.sqlite").exists(),
+        "gates created the store"
+    );
+}
