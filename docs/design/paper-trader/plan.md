@@ -383,6 +383,7 @@ How to read the tables:
 | O39 | live-cycle-failures | Settle and reconcile but send nothing while halted | R-315 | sonnet | crates/live/src/cycle.rs, crates/live/tests/cycle_halted.rs | cargo test -p pt-live --test cycle_halted |
 | O40 | live-cycle-failures | Finish the run as failed, with an alert, on a broker or data error | R-316 | sonnet | crates/live/src/cycle.rs, crates/live/tests/cycle_failed.rs | cargo test -p pt-live --test cycle_failed |
 | O41 | live-cycle-failures | Finish as data-not-ready after settling and reconciling | R-318 | sonnet | crates/live/src/cycle.rs, crates/live/tests/cycle_data.rs | cargo test -p pt-live --test cycle_data |
+| N12 | live-first-order | Add Gate::first_order, reading the approved first order | R-319 | sonnet | crates/gate/src/gate.rs, crates/gate/tests/first_order_approval.rs | cargo test -p pt-gate --test first_order_approval |
 | O42 | live-first-order | Add first_order, planning the approved order on its day | R-319, R-320 | sonnet | crates/live/src/first_order.rs, crates/live/tests/first_order_plan.rs | cargo test -p pt-live --test first_order_plan |
 | O43 | live-first-order | Send it from the cycle in the first-order stage, with no rebalance | R-319 | opus | crates/live/src/cycle.rs, crates/live/tests/cycle_first_order.rs | cargo test -p pt-live --test cycle_first_order |
 | O44 | live-first-order | Prove it is never repeated | R-320 | sonnet | crates/live/src/cycle.rs, crates/live/src/first_order.rs, crates/live/tests/cycle_first_order_repeat.rs | cargo test -p pt-live --test cycle_first_order_repeat |
@@ -447,12 +448,12 @@ Wave | Chains that can run together
 9 | live-legs (3), live-rebalance-timing (4), live-killswitch (2), shadow-signoff (3), cli-backtest (3)
 10 | live-cycle (5), cli-validate (4)
 11 | live-cycle-failures (3)
-12 | live-first-order (3)
+12 | live-first-order (4)
 13 | cli-live (3)
 14 | cli-ops (4)
 15 | cli-e2e (2)
 
-88 chains, 322 steps. Widest wave: 17 chains. Longest chain: 10 steps.
+88 chains, 323 steps. Widest wave: 17 chains. Longest chain: 10 steps.
 
 What the waves mean in practice:
 
@@ -539,7 +540,7 @@ One line per chain: what to look for when reviewing it.
 - `live-rebalance-timing`: The first paper rebalance is exempt from the lateness limit and must be marked `bootstrap`.
 - `live-cycle`: Read the phase order against requirement R-313 and check each stage runs only its phases.
 - `live-cycle-failures`: These are the failure drills. In each, count the POSTs the mock recorded: it must be zero.
-- `live-first-order`: Check the order can be sent only on `valid_on`, only once, and that no rebalance happens in this stage.
+- `live-first-order`: N12 is one reader on `Gate` in `pt-gate`: check that it adds a method, changes none, and that no permit can come from it (see Replans). Then check the order can be sent only on `valid_on`, only once, and that no rebalance happens in this stage.
 - `live-killswitch`: Flatten orders must be authorised as risk-reducing and must leave the system halted.
 - `shadow-slippage`: Sign convention: positive means the fill was worse than the reference, for buys and sells.
 - `shadow-daily`: On a day without orders the difference must be exactly zero; if it is not, the two books are valued differently.
@@ -971,3 +972,78 @@ Rejected:
 - Adding `ops.rs` to the Files of R16. The step would then cross two crates, and its Files would change.
 
 Architecture 5.4 lists the methods of `Store` and has no reader for the family of a stored run. That is a gap, not a contradiction: `dsr_for_run` in 5.8 needs a family, the command table in 5.8 gives the command only a run id, and one more read method satisfies both. So the architecture is not the cause of this replan and is not changed by it. The next revision should add one line to the `ops.rs` block of 5.4: `pub fn backtest_family(&self, run_id: i64) -> Result<String, StoreError>;`. The note on V09 above says the same of the stored config hash; the two readers could be added together.
+
+### live-first-order, replan 1: O42 was stuck
+
+O42 ("Add first_order, planning the approved order on its day") could not be built inside its Files. `first_order(ctx, wire_clock)` must plan the order the owner approved in `[first_order]`: its symbol, side, `max_qty` and `valid_on`. `LiveContext` (architecture 5.8) carries a `&Gate` and no owner file. `Gate` (architecture 5.3) keeps the owner file in a private field and offers `new`, `stage`, `allows` and `authorize`. `authorize` says yes or no to an order the caller already has; it cannot say which order to build. So `first_order.rs` had no way to learn what was approved.
+
+Guessing does not work. A caller could try orders against `authorize` until one gets a permit, but it cannot find the symbol that way, and a permit is the proof for sending one order, not a query.
+
+What changed:
+
+- One new step, N12, on `live-first-order`, before O42. The chain is now N12, O42, O43, O44.
+- O42, O43 and O44 are unchanged: ID, Step, Reqs, Tier, Files and Proof. Requirements and architecture are unchanged.
+- No chain, After or wave changed. The chain has four steps instead of three.
+
+N12:
+
+- In `crates/gate/src/gate.rs`, add `pub fn first_order(&self) -> Option<&FirstOrderApproval>` to `impl Gate`, next to `stage`. It returns `self.owner.first_order.as_ref()`. The import becomes `use crate::owner::{FirstOrderApproval, OwnerFile, Stage};`.
+- It is a reader, not a permission. It does not look at the stage, the flat confirmation, the allowlist or a halt, and it issues nothing. `authorize` is unchanged and is still the only place an `OrderPermit` is made.
+- Add nothing else. No `owner()` accessor and no public field: `OwnerFile` also holds the allowlist and the alert webhook URL, and nothing in `pt-live` needs them from the gate. No change to `allows`, `authorize`, `OrderPermit` or the `compile_fail` doctest of R-265. `owner.rs`, `status.rs`, `lib.rs`, `error.rs` and `Cargo.toml` are not touched.
+- The ID is N12 because the file is in component N (`pt-gate`). N11 was the last N step.
+
+Tests for N12 (`crates/gate/tests/first_order_approval.rs`):
+
+- R-319 is in Reqs because N12 enables it. Its acceptance check belongs to O42 and O43 and is not what the tester writes here. No requirement row describes this reader, so the cases are these four, in the style of `tests/authorize_first_order.rs`. The approval throughout is (SPY, buy, `max_qty` 1, `valid_on` 2026-12-02), and "the gate" is `Gate::new` of an `OwnerFile` with stage `FirstOrder`, `account_flat_confirmed_on` 2026-12-01 and that approval, the rest default.
+- The gate's `first_order()` equals `Some(&approval)`: all four fields come back as the owner file holds them.
+- The same owner file with `first_order: None` gives `None`. `Gate::new(OwnerFile::default()).first_order()` is `None` too.
+- For each of the five stages, a gate built from `OwnerFile { stage, first_order: Some(approval), ..OwnerFile::default() }` (no flat confirmation) gives `Some(&approval)`. The reader reports the file; it does not judge it.
+- With the gate, build an `OrderSummary` from what `first_order()` returns (its symbol, its side, `qty` equal to its `max_qty`, any client order id) and an `AuthContext` with `today` equal to its `valid_on`, `is_first_order = true`, and `halted`, `risk_reducing` and `first_order_already_sent` false. `authorize` returns a permit for which `matches` is true for that order. The same order with symbol QQQ returns `Err(GateError::FirstOrderMismatch)`. This shows the reader and `authorize` speak of the same approval, and that reading it grants nothing.
+
+O42, with N12 in place:
+
+- `first_order.rs` calls `ctx.gate.first_order()`. `None` is `Ok(false)`, which is the fourth locked case. A `valid_on` other than `trade_session(wire_clock)` is `Ok(false)`, which is the third.
+- Otherwise it writes one order row with `insert_order` and returns `Ok(true)`: the id is `first_order_id(valid_on, symbol)`, the state is `Intent`, `decision_id` is `None`, and `trade_date` is `valid_on`. It writes no decision and calls no broker endpoint.
+- The approval holds the symbol and the side as text. `Symbol::new` and a match on `buy` and `sell` turn them into the types `OrderRow` takes. Anything else is `LiveError::Invalid`, not a panic and not a default.
+- Do not call `authorize` in O42. Planning is not sending: `submit_planned` asks for the permit when the cycle sends the intent (O43).
+- The locked test fixes the quantity only for `max_qty` 1, where it is 1. See "Not decided here" below.
+
+The locked test of O42:
+
+- `crates/live/tests/first_order_plan.rs` is already written (blob `c2668a208ee7`) and has been set aside by whoever runs the chain. It stays exactly as it is and is committed with O42.
+- It cannot pass before O42, and `CHECK` runs `cargo test --workspace`. It must stay out of the chain worktree while N12 is built, and go back, with the same blob hash, before O42. It must not be staged into the N12 commit.
+
+Checked with a trial build of a copy of `chain/paper-trader/live-first-order` at `323708d` (O34 to O41), outside the repository:
+
+- With the method and the four gate cases alone: `cargo fmt --all --check` passes, `cargo clippy --workspace --all-targets --locked -- -D warnings` is clean, and `cargo test -p pt-gate` (the 65 existing tests, the four new ones and the doctest of R-265) and `cargo test -p pt-archtest` pass. The method is public on a public type, so it is not dead code before O42 calls it.
+- With a throwaway `first_order.rs` on top (47 lines), all four cases of the locked `first_order_plan.rs` pass, and clippy is clean for `pt-gate` and `pt-live`. No other file was touched.
+- Size of N12: about 7 lines and one changed import in `gate.rs`, about 85 lines of test.
+
+O43 and O44 were checked and are not affected:
+
+- O43 edits `cycle.rs`, which has `ctx.gate`. With N12 it can also read the approval, so it can form `first_order_id(valid_on, symbol)`, look the order up in the store, and fill `is_first_order`, `today` and `first_order_already_sent` of the `AuthContext` it passes to `submit_planned`. Without N12 it would have stopped at the same wall as O42.
+- `submit_planned` builds the `OrderSummary` side as the text `buy` or `sell` (`side_text` in `submit.rs`), which is how the owner file writes it, so the exact comparison in `authorize` holds for an intent planned from the approval.
+- O43 calls `first_order` only when `ctx.gate.stage()` is `FirstOrder`: that is its Step text and R-319. Nothing in N12 enforces it, because the reader is the same in every stage.
+- `insert_order` returns `StoreError::Duplicate` for an id already stored. What a second call of `first_order` on the same day does is not asked by the locked test of O42. It belongs to O43 and O44, and O44 lists `first_order.rs` for it.
+
+Who writes `gate.rs`:
+
+- `gate-authorize` (N05 to N10, landed), then `live-first-order` (N12). `gate-authorize` is an ancestor of `live-first-order` through `live-context`.
+- No other step that has not landed lists a file under `crates/gate/`. The six chains not yet landed are `live-cycle`, `live-cycle-failures` and `live-first-order`, which write `crates/live/` (and now N12), and `cli-live`, `cli-ops` and `cli-e2e`, which write `crates/cli/` only. `live-cycle` and `live-cycle-failures` come before this chain and the three `cli` chains after it, so none runs beside it.
+- No chain or integration branch that exists today differs from the default branch under `crates/gate/`. `first_order_approval.rs` is a new name in `crates/gate/tests/`.
+- N12 adds a method and changes none, so every crate that calls `pt-gate` builds the same before and after it.
+
+Rejected:
+
+- An `owner: &OwnerFile` field on `LiveContext`. It changes a struct of architecture 5.8, the shared fixture `crates/live/tests/common/mod.rs` that every live test reads, and the wiring of `trader run` (R19). It also gives the context two copies of the owner's answers that can disagree: the locked test of O42 replaces `fx.gate` alone.
+- Making `Gate.owner` public, or an `owner()` accessor. Wider than the need, as said under N12.
+- A reader that returns `None` outside the first-order stage. It hides a rule inside a getter. The stage has its own reader, `Gate::stage`, and the cycle already chooses its phases by it.
+- Reading the owner file again in `pt-live`. The path and the in-repository check (R-262) belong to the binary, and a second read could differ from the gate's.
+- A chain of its own for N12, with `live-first-order` after it. Only this chain needs the method, nothing is ready to run beside it, and the chain would cost one more landing.
+- Adding `gate.rs` to the Files of O42. The step would then cross two crates, and its Files would change.
+
+Not decided here:
+
+- Which quantity the first order has when `max_qty` is more than 1. R-268 treats `max_qty` as a ceiling, and R-319 and the locked test cover `max_qty` 1 only. The approval is the only quantity `first_order` has, so the trial used `max_qty`; 1 would also satisfy every check that exists. This did not cause the replan and no row changes for it. It should be added to `requirements-gaps.md`.
+
+Architecture 5.3 lists the methods of `Gate` and has no reader for the approval. That is a gap, not a contradiction: `first_order` in 5.8 needs the approval, `LiveContext` in 5.8 gives it only the gate, and one more read method satisfies both. So the architecture is not the cause of this replan and is not changed by it. The next revision should add one line to the `impl Gate` block of 5.3: `pub fn first_order(&self) -> Option<&FirstOrderApproval>;`.
