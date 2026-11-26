@@ -298,11 +298,58 @@ impl Store {
         equity: &[(NaiveDate, Decimal)],
         at: DateTime<Utc>,
     ) -> Result<i64, StoreError> {
+        self.save_backtest_inner(family, trial_hash, config_hash, None, equity, at)
+    }
+
+    /// Like `save_backtest`, and also keeps the starting capital and where it
+    /// came from.
+    #[allow(clippy::too_many_arguments)]
+    pub fn save_backtest_with_capital(
+        &self,
+        family: &str,
+        trial_hash: &str,
+        config_hash: &str,
+        initial_capital: Decimal,
+        capital_source: &str,
+        equity: &[(NaiveDate, Decimal)],
+        at: DateTime<Utc>,
+    ) -> Result<i64, StoreError> {
+        self.save_backtest_inner(
+            family,
+            trial_hash,
+            config_hash,
+            Some((initial_capital, capital_source)),
+            equity,
+            at,
+        )
+    }
+
+    fn save_backtest_inner(
+        &self,
+        family: &str,
+        trial_hash: &str,
+        config_hash: &str,
+        capital: Option<(Decimal, &str)>,
+        equity: &[(NaiveDate, Decimal)],
+        at: DateTime<Utc>,
+    ) -> Result<i64, StoreError> {
         let tx = self.conn.unchecked_transaction()?;
+        let (cap, source) = match capital {
+            Some((c, s)) => (Some(dec_to_text(c)), Some(s)),
+            None => (None, None),
+        };
         tx.execute(
-            "INSERT INTO backtest_runs (family, trial_hash, config_hash, created_at) \
-             VALUES (?1, ?2, ?3, ?4)",
-            rusqlite::params![family, trial_hash, config_hash, instant_to_text(at)],
+            "INSERT INTO backtest_runs \
+             (family, trial_hash, config_hash, created_at, initial_capital, capital_source) \
+             VALUES (?1, ?2, ?3, ?4, ?5, ?6)",
+            rusqlite::params![
+                family,
+                trial_hash,
+                config_hash,
+                instant_to_text(at),
+                cap,
+                source
+            ],
         )?;
         let id = tx.last_insert_rowid();
         {
@@ -319,6 +366,28 @@ impl Store {
         }
         tx.commit()?;
         Ok(id)
+    }
+
+    /// The starting capital and its source of a saved backtest; `None` for a
+    /// run saved without them.
+    pub fn backtest_capital(&self, id: i64) -> Result<Option<(Decimal, String)>, StoreError> {
+        match self.conn.query_row(
+            "SELECT initial_capital, capital_source FROM backtest_runs WHERE id = ?1",
+            [id],
+            |r| {
+                Ok((
+                    r.get::<_, Option<String>>(0)?,
+                    r.get::<_, Option<String>>(1)?,
+                ))
+            },
+        ) {
+            Ok((Some(c), Some(s))) => Ok(Some((text_to_dec(&c)?, s))),
+            Ok(_) => Ok(None),
+            Err(rusqlite::Error::QueryReturnedNoRows) => {
+                Err(StoreError::NotFound(format!("backtest {id}")))
+            }
+            Err(e) => Err(e.into()),
+        }
     }
 
     /// The equity curve of a saved backtest, in date order.
