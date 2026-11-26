@@ -39,6 +39,10 @@ pub enum RebalanceOutcome {
     Recorded { decision_id: i64, orders: usize },
     /// A needed symbol has no stored bar for the reference date; nothing was decided.
     DataNotReady,
+    /// The trade date is past the allowed delay; the decision was stored as skipped.
+    SkippedLate,
+    /// Too few minutes remain before the close; nothing was written (R-307).
+    Deferred,
 }
 
 /// Decides the rebalance for the latest month-end signal date whose trade
@@ -64,6 +68,11 @@ pub fn rebalance(ctx: &LiveContext, wire_clock: &WireClock) -> Result<RebalanceO
         .store
         .decision_for(ctx.strategy.id(), due.signal_date, mode)?
     {
+        // A skipped decision has no orders to write; its outputs are kept only
+        // so it can be replayed.
+        if existing.status == "skipped_late" {
+            return Ok(RebalanceOutcome::NotDue);
+        }
         // A run may have stopped between recording the decision and writing all
         // of its orders; write any that are missing from the stored decision.
         let trade_date = existing.trade_date.ok_or_else(|| {
@@ -73,6 +82,25 @@ pub fn rebalance(ctx: &LiveContext, wire_clock: &WireClock) -> Result<RebalanceO
         write_orders(ctx, existing.id, due.signal_date, trade_date, &orders, dry)?;
         return Ok(RebalanceOutcome::NotDue);
     }
+    // Too close to the close: write nothing, so a later call can decide (R-307).
+    let minutes_left = (wire_clock.next_close - wire_clock.timestamp).num_minutes();
+    if minutes_left < i64::from(ctx.cfg.risk.min_minutes_before_close) {
+        return Ok(RebalanceOutcome::Deferred);
+    }
+    // The normal trade date is the session after the signal date; each session
+    // after it counts as one session late. Exactly at the limit is on time.
+    let normal = calendar.next_session(due.signal_date).ok_or_else(|| {
+        LiveError::Invalid(format!("no session after signal date {}", due.signal_date))
+    })?;
+    let late = calendar
+        .sessions_between(normal, trade_date)
+        .len()
+        .saturating_sub(1);
+    // The first rebalance of a mode is allowed however late it is (R-306).
+    let bootstrap = ctx.store.decisions(mode)?.is_empty();
+    // A late rebalance is still decided below, so its skipped row carries a
+    // full record and outputs that replay like any other decision.
+    let skip_late = !bootstrap && late > ctx.cfg.risk.max_rebalance_delay_sessions as usize;
     let ref_date = calendar
         .prev_session(trade_date)
         .ok_or_else(|| LiveError::Invalid(format!("no session before trade date {trade_date}")))?;
@@ -92,12 +120,14 @@ pub fn rebalance(ctx: &LiveContext, wire_clock: &WireClock) -> Result<RebalanceO
 
     let mut universe = Vec::new();
     let mut shortable = BTreeSet::new();
+    let mut untradable = Vec::new();
     for inst in &ctx.cfg.universe {
         let symbol = symbol(&inst.symbol)?;
         let Some(asset) = ctx.store.asset_asof(&symbol, None)? else {
             continue;
         };
         if !asset.tradable {
+            untradable.push(symbol);
             continue;
         }
         if inst.shortable && asset.shortable && asset.easy_to_borrow {
@@ -147,8 +177,34 @@ pub fn rebalance(ctx: &LiveContext, wire_clock: &WireClock) -> Result<RebalanceO
         feed,
         config_hash: config_hash(ctx.cfg),
         code_version: ctx.code_version.to_string(),
-        bootstrap: false,
+        bootstrap,
     };
+    if skip_late {
+        // The alert is written before the row: if it fails, no row exists and
+        // a rerun tries both again. Nothing is written as an order or sent.
+        ctx.store.record_alert(
+            "warn",
+            "late_rebalance_skipped",
+            &format!(
+                "rebalance for signal date {} is {late} sessions late on {trade_date}; skipped",
+                due.signal_date
+            ),
+            false,
+            now,
+        )?;
+        ctx.store.insert_decision(&DecisionRow {
+            id: 0,
+            strategy_id: ctx.strategy.id().to_string(),
+            signal_date: due.signal_date,
+            trade_date: Some(trade_date),
+            mode,
+            status: "skipped_late".to_string(),
+            inputs_json: record_to_json(&record),
+            outputs_json: decision_to_json(&decision),
+            created_at: now,
+        })?;
+        return Ok(RebalanceOutcome::SkippedLate);
+    }
     let decision_id = ctx.store.insert_decision(&DecisionRow {
         id: 0,
         strategy_id: ctx.strategy.id().to_string(),
@@ -160,6 +216,17 @@ pub fn rebalance(ctx: &LiveContext, wire_clock: &WireClock) -> Result<RebalanceO
         outputs_json: decision_to_json(&decision),
         created_at: now,
     })?;
+    // After the decision is stored, so a rerun (which returns above) or a
+    // data-not-ready retry never repeats an alert for the same decision.
+    for symbol in &untradable {
+        ctx.store.record_alert(
+            "warn",
+            "not_tradable",
+            &format!("{symbol} is not tradable; left out of the universe"),
+            false,
+            now,
+        )?;
+    }
     let orders: Vec<PlannedOrder> = decision
         .orders
         .iter()
