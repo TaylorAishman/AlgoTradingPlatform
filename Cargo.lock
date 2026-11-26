@@ -639,7 +639,6 @@ version = "0.1.0"
 dependencies = [
  "chrono",
  "pt-gate",
- "pt-mock-alpaca",
  "rust_decimal",
  "serde",
  "serde_json",
@@ -676,19 +675,14 @@ dependencies = [
  "pt-config",
  "pt-core",
  "pt-data",
- "pt-engine",
  "pt-gate",
  "pt-live",
  "pt-mock-alpaca",
  "pt-ops",
- "pt-portfolio",
- "pt-risk",
  "pt-shadow",
- "pt-stats",
  "pt-store",
  "pt-strategy",
  "pt-validate",
- "pt-vector",
  "rust_decimal",
  "serde_json",
  "tempfile",
@@ -714,8 +708,6 @@ version = "0.1.0"
 dependencies = [
  "chrono",
  "rust_decimal",
- "serde",
- "serde_json",
  "thiserror",
 ]
 
@@ -726,13 +718,11 @@ dependencies = [
  "chrono",
  "csv",
  "pt-alpaca",
- "pt-calendar",
  "pt-config",
  "pt-core",
  "pt-mock-alpaca",
  "pt-store",
  "rust_decimal",
- "tempfile",
  "thiserror",
 ]
 
@@ -748,7 +738,6 @@ dependencies = [
  "pt-risk",
  "pt-strategy",
  "rust_decimal",
- "serde",
  "serde_json",
  "thiserror",
 ]
@@ -758,7 +747,6 @@ name = "pt-gate"
 version = "0.1.0"
 dependencies = [
  "chrono",
- "pt-core",
  "serde",
  "tempfile",
  "thiserror",
@@ -841,7 +829,6 @@ dependencies = [
  "pt-core",
  "pt-data",
  "pt-engine",
- "pt-stats",
  "pt-store",
  "pt-strategy",
  "rust_decimal",
