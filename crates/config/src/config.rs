@@ -340,6 +340,17 @@ fn validate(cfg: &Config) -> Result<(), ConfigError> {
             cfg.strategy.vol_min_obs, cfg.strategy.vol_max_obs
         )));
     }
+    for (key, value) in [
+        ("min_sessions", cfg.signoff.min_sessions),
+        ("min_rebalances", cfg.signoff.min_rebalances),
+        ("min_fills", cfg.signoff.min_fills),
+    ] {
+        if value < 1 {
+            return Err(ConfigError::Invalid(format!(
+                "signoff.{key} must be at least 1, got {value}"
+            )));
+        }
+    }
     if cfg.stats.pbo_partitions < 2 || !cfg.stats.pbo_partitions.is_multiple_of(2) {
         return Err(ConfigError::Invalid(format!(
             "stats.pbo_partitions must be an even number of at least 2, got {}",
