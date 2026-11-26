@@ -10,6 +10,9 @@ use pt_core::view::HistoryView;
 use std::collections::BTreeMap;
 use std::sync::Arc;
 
+/// The strategy id.
+pub const ID: &str = "tsmom-v1";
+
 /// Parameters of [`Tsmom`].
 #[derive(Debug, Clone, PartialEq)]
 pub struct TsmomParams {
@@ -43,7 +46,7 @@ fn close_on(view: &dyn HistoryView, symbol: &Symbol, date: NaiveDate) -> Option<
 
 impl Strategy for Tsmom {
     fn id(&self) -> &str {
-        "tsmom-v1"
+        ID
     }
 
     fn params_canonical(&self) -> String {
