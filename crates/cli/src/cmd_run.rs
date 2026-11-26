@@ -13,6 +13,8 @@ use pt_core::view::HistoryView;
 use pt_gate::gate::Gate;
 use pt_live::context::LiveContext;
 use pt_live::cycle::{run_cycle, RunStatus};
+use pt_live::error::LiveError;
+use pt_live::lock::acquire_run_lock;
 use pt_ops::alert::Alerter;
 use pt_store::db::Store;
 use pt_strategy::error::StrategyError;
@@ -87,12 +89,24 @@ fn webhook(owner_url: Option<String>) -> Option<String> {
     }
 }
 
-/// Run one cycle. Exits 0 when it ends ok and 1 when it fails.
+/// Run one cycle. Exits 0 when it ends ok, 1 when it fails, 2 when it is
+/// halted and 3 when another run holds the lock.
 pub fn run() -> anyhow::Result<i32> {
     let cfg = wiring::load_config()?;
     let owner = wiring::load_owner()?;
     let keys = wiring::load_keys()?;
     let store = open_store(&cfg.run.db_path)?;
+    let _lock = match acquire_run_lock(Path::new(&cfg.run.db_path)) {
+        Ok(lock) => lock,
+        Err(LiveError::AlreadyRunning) => {
+            wiring::log(
+                "error",
+                &format!("another run holds the lock on {}", cfg.run.db_path),
+            );
+            return Ok(3);
+        }
+        Err(e) => return Err(e.into()),
+    };
     let http = wiring::build_client()?;
 
     let alerter = Alerter::new(
@@ -135,6 +149,7 @@ pub fn run() -> anyhow::Result<i32> {
     );
     match outcome.status {
         RunStatus::Failed => Ok(1),
+        RunStatus::Halted => Ok(2),
         _ => Ok(0),
     }
 }
