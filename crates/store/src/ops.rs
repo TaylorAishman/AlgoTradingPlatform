@@ -1,4 +1,5 @@
-//! Operations records: the log of runs of the binary.
+//! Operations records: the log of runs of the binary, trading halts,
+//! alerts, strategy trials and saved backtests.
 
 use crate::codec::{dec_to_text, text_to_dec};
 use crate::db::Store;
