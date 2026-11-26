@@ -10,6 +10,7 @@ use chrono::{NaiveTime, TimeZone, Utc};
 use pt_alpaca::activities::{fill_activities, WireFill};
 use pt_alpaca::orders_read::order_by_client_id;
 use pt_core::order_state::OrderState;
+use pt_ops::alert::Level;
 use pt_store::trading::{Book, FillRow, LedgerEntry, OrderRow};
 use rust_decimal::Decimal;
 
@@ -22,6 +23,8 @@ use crate::status::map_status;
 pub struct SettleReport {
     pub orders_updated: usize,
     pub fills_recorded: usize,
+    /// Opening (leg 2) intents whose closing leg 1 is seen `Filled`.
+    pub legs_released: usize,
 }
 
 /// Asks the broker about every open (`Submitted` or `PartiallyFilled`) order,
@@ -41,6 +44,8 @@ pub fn settle(ctx: &LiveContext) -> Result<SettleReport, LiveError> {
     let open = [OrderState::Submitted, OrderState::PartiallyFilled];
     let rows = ctx.store.orders_in_states(&open)?;
     let Some(earliest) = rows.iter().map(|r| r.trade_date).min() else {
+        abandon_legs(ctx)?;
+        report.legs_released = released_legs(ctx)?;
         return Ok(report);
     };
     let after = Utc.from_utc_datetime(&earliest.and_time(NaiveTime::MIN));
@@ -61,13 +66,20 @@ pub fn settle(ctx: &LiveContext) -> Result<SettleReport, LiveError> {
         let Some(wire) = order_by_client_id(ctx.http, &row.client_order_id)? else {
             continue;
         };
+        let broker_state = match map_status(&wire.status, wire.filled_qty) {
+            Ok(state) => state,
+            Err(LiveError::UnexpectedStatus(status)) => {
+                halt_unexpected(ctx, &row, &status)?;
+                continue;
+            }
+            Err(e) => return Err(e),
+        };
         for fill in activities.iter().filter(|f| f.order_id == wire.id) {
             if record_fill(ctx, &row, fill, &mut ledgered)? {
                 report.fills_recorded += 1;
                 *stored.entry(fill.order_id.clone()).or_default() += fill.qty;
             }
         }
-        let broker_state = map_status(&wire.status, wire.filled_qty)?;
         let stored_qty = stored.get(&wire.id).copied().unwrap_or(0);
         let (state, filled_qty) = supported(broker_state, wire.filled_qty, row.qty, stored_qty);
         if state == row.state && filled_qty == row.filled_qty {
@@ -99,7 +111,98 @@ pub fn settle(ctx: &LiveContext) -> Result<SettleReport, LiveError> {
         )?;
         report.orders_updated += 1;
     }
+    abandon_legs(ctx)?;
+    report.legs_released = released_legs(ctx)?;
     Ok(report)
+}
+
+/// Sets an `unexpected_order_status` halt naming the order and a critical
+/// `halt_set` alert, unless one is already active. The order is left as it is.
+fn halt_unexpected(ctx: &LiveContext, row: &OrderRow, status: &str) -> Result<(), LiveError> {
+    const REASON: &str = "unexpected_order_status";
+    if ctx.store.active_halts()?.iter().any(|h| h.reason == REASON) {
+        return Ok(());
+    }
+    let detail = format!(
+        "order {} reported status {status}, which the design never causes",
+        row.client_order_id
+    );
+    let now = ctx.clock.now_utc();
+    ctx.store.set_halt(REASON, &detail, now)?;
+    ctx.alerter.alert(
+        ctx.store,
+        Level::Critical,
+        "halt_set",
+        &format!("halt {REASON}: {detail}"),
+        None,
+        now,
+    );
+    Ok(())
+}
+
+/// Moves each leg-2 intent whose leg 1 (same decision and symbol) ended
+/// unfilled (`Expired`, `Canceled` or `Rejected` with nothing filled) to
+/// `Abandoned`, with an `order_abandoned` alert recorded first so a crash
+/// between the two repeats the alert rather than losing it.
+fn abandon_legs(ctx: &LiveContext) -> Result<(), LiveError> {
+    let ended = [
+        OrderState::Expired,
+        OrderState::Canceled,
+        OrderState::Rejected,
+    ];
+    let dead: Vec<OrderRow> = ctx
+        .store
+        .orders_in_states(&ended)?
+        .into_iter()
+        .filter(|o| o.filled_qty == 0)
+        .collect();
+    for o in ctx.store.orders_in_states(&[OrderState::Intent])? {
+        if o.leg != 2 || o.decision_id.is_none() {
+            continue;
+        }
+        let Some(leg1) = dead
+            .iter()
+            .find(|d| d.leg == 1 && d.decision_id == o.decision_id && d.symbol == o.symbol)
+        else {
+            continue;
+        };
+        ctx.store.record_alert(
+            "warn",
+            "order_abandoned",
+            &format!(
+                "{} order {} abandoned: leg 1 {} ended {:?} unfilled",
+                o.symbol, o.client_order_id, leg1.client_order_id, leg1.state
+            ),
+            false,
+            ctx.clock.now_utc(),
+        )?;
+        ctx.store.set_order_state(
+            &o.client_order_id,
+            OrderState::Abandoned,
+            0,
+            None,
+            ctx.clock.now_utc(),
+        )?;
+    }
+    Ok(())
+}
+
+/// Counts the leg-2 intents whose leg 1 (same decision and symbol) is `Filled`.
+fn released_legs(ctx: &LiveContext) -> Result<usize, LiveError> {
+    let filled = ctx.store.orders_in_states(&[OrderState::Filled])?;
+    let intents = ctx.store.orders_in_states(&[OrderState::Intent])?;
+    Ok(intents
+        .iter()
+        .filter(|o| o.leg == 2 && leg1_filled(o, &filled))
+        .count())
+}
+
+/// True when `filled` holds the leg 1 of `leg2`'s decision and symbol.
+pub(crate) fn leg1_filled(leg2: &OrderRow, filled: &[OrderRow]) -> bool {
+    leg2.decision_id.is_some()
+        && filled
+            .iter()
+            .any(|o| o.leg == 1 && o.decision_id == leg2.decision_id && o.symbol == leg2.symbol)
 }
 
 /// The state and filled quantity the stored fills support. The broker claims
