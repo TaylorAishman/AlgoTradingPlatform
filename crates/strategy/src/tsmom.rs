@@ -66,6 +66,11 @@ impl Strategy for Tsmom {
         asof: NaiveDate,
         view: &dyn HistoryView,
     ) -> Result<SignalSet, StrategyError> {
+        if self.params.lookback_months.is_empty() {
+            return Err(StrategyError::Invalid(
+                "lookback_months is empty".to_string(),
+            ));
+        }
         if !self.calendar.is_session(asof) {
             return Err(StrategyError::NotASession(asof));
         }
@@ -102,7 +107,7 @@ impl Strategy for Tsmom {
                     ineligible.insert(symbol.clone(), reason);
                 }
                 None => {
-                    let n = self.params.lookback_months.len().max(1) as f64;
+                    let n = self.params.lookback_months.len() as f64;
                     signals.insert(symbol.clone(), total / n);
                 }
             }
