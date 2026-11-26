@@ -4,6 +4,7 @@ use std::path::Path;
 
 use anyhow::Context;
 use chrono::Utc;
+use pt_ops::report::{last_ok_run_age_hours, write_status, ReportInputs};
 use pt_store::db::Store;
 use pt_store::error::StoreError;
 
@@ -73,12 +74,54 @@ pub fn flatten(_args: &ConfirmArgs) -> anyhow::Result<i32> {
     anyhow::bail!("`flatten` is not implemented yet")
 }
 
+/// Write `status.md` and `status.json` from the store. Needs no network.
+///
+/// The fidelity section is left empty: computing it needs the strategy, which
+/// is built only inside the `run` command.
 pub fn report() -> anyhow::Result<i32> {
-    anyhow::bail!("`report` is not implemented yet")
+    let cfg = wiring::load_config()?;
+    let owner = wiring::load_owner()?;
+    let store = open_store(&cfg.run.db_path)?;
+    let inputs = ReportInputs {
+        store: &store,
+        cfg: &cfg,
+        stage: wiring::stage_name(owner.stage),
+        fidelity: &[],
+        validation_signoff: owner.validation_signoff.as_deref(),
+        now: Utc::now(),
+    };
+    let (md, json) = write_status(&inputs)?;
+    println!("wrote {} and {}", md.display(), json.display());
+    Ok(0)
 }
 
-pub fn status(_max_age_hours: Option<u64>) -> anyhow::Result<i32> {
-    anyhow::bail!("`status` is not implemented yet")
+/// Exit 0 when the latest finished `ok` run is at most `max_age_hours` old.
+/// Exit 1, with the reason in a log line, when there is none or it is older.
+/// Without a limit, only the existence of an `ok` run is checked.
+pub fn status(max_age_hours: Option<u64>) -> anyhow::Result<i32> {
+    let cfg = wiring::load_config()?;
+    let store = open_store(&cfg.run.db_path)?;
+    match last_ok_run_age_hours(&store, Utc::now())? {
+        None => {
+            wiring::log("error", "no successful run has finished");
+            Ok(1)
+        }
+        Some(age) => {
+            match max_age_hours {
+                Some(max) if age > max as f64 => {
+                    wiring::log(
+                    "error",
+                    &format!("last successful run finished {age:.1} hours ago, over the limit of {max}"),
+                );
+                    Ok(1)
+                }
+                _ => {
+                    println!("last successful run finished {age:.1} hours ago");
+                    Ok(0)
+                }
+            }
+        }
+    }
 }
 
 pub fn signoff(_action: &SignoffCmd) -> anyhow::Result<i32> {
