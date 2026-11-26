@@ -4,7 +4,7 @@
 use chrono::NaiveDate;
 
 use crate::error::GateError;
-use crate::owner::{OwnerFile, Stage};
+use crate::owner::{FirstOrderApproval, OwnerFile, Stage};
 
 /// Something the program may ask to do.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
@@ -84,6 +84,13 @@ impl Gate {
     /// The operating stage the owner file grants.
     pub fn stage(&self) -> Stage {
         self.owner.stage
+    }
+
+    /// The first order the owner approved in `[first_order]`, if any. A plain
+    /// reader, the same in every stage; it issues no permit. `authorize` is
+    /// still the only way to send an order.
+    pub fn first_order(&self) -> Option<&FirstOrderApproval> {
+        self.owner.first_order.as_ref()
     }
 
     /// Whether the current stage allows `cap`. Fails closed: only entries in the
