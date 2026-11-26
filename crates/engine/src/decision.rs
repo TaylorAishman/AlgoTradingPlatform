@@ -86,6 +86,18 @@ pub fn decide_with(
     p: &DecisionParams,
 ) -> Result<Decision, EngineError> {
     let weights = target_weights(&signals.signals, &risk, &inputs.shortable, &p.sizing);
+    finish(signals, risk, weights, inputs, ref_prices, p)
+}
+
+/// Targets, orders and the risk gate for weights already computed.
+fn finish(
+    signals: SignalSet,
+    risk: RiskEstimates,
+    weights: Weights,
+    inputs: &DecisionInputs,
+    ref_prices: &BTreeMap<Symbol, Price>,
+    p: &DecisionParams,
+) -> Result<Decision, EngineError> {
     let target = target_shares(&weights, inputs.equity, ref_prices)?;
     let planned = plan_orders(&inputs.positions, &target, ref_prices)?;
     let gate = check_orders(
@@ -132,7 +144,7 @@ pub fn decide(
                 })?;
         ref_prices.insert(symbol.clone(), bar.close);
     }
-    decide_with(signals, risk, inputs, &ref_prices, p)
+    finish(signals, risk, weights, inputs, &ref_prices, p)
 }
 
 /// Non-finite values (NaN, infinities) become `null`.
