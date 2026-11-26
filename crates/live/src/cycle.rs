@@ -9,6 +9,7 @@ use pt_data::ingest::ingest;
 use pt_data::reference::{sync_assets, sync_calendar};
 use pt_gate::gate::{AuthContext, Capability};
 use pt_gate::owner::Stage;
+use pt_ops::alert::Level;
 
 use crate::context::LiveContext;
 use crate::error::LiveError;
@@ -51,19 +52,22 @@ pub fn run_cycle(ctx: &LiveContext) -> Result<RunOutcome, LiveError> {
     )?;
 
     let mut phases: Vec<String> = Vec::new();
-    let mut status = RunStatus::Ok;
-    let wire_clock = read_only_phases(ctx, &mut phases)?;
-
-    // Only the dry-run stage records a decision without sending it; the paper
-    // stage settles, reconciles, decides and submits.
-    let dry_run_only = ctx.gate.allows(Capability::RecordDryRun).is_ok()
-        && ctx.gate.allows(Capability::SubmitOrder).is_err();
-    if dry_run_only {
-        rebalance(ctx, &wire_clock)?;
-        phases.push("rebalance".to_string());
-    } else if ctx.gate.stage() == Stage::Paper {
-        status = paper_phases(ctx, &wire_clock, &mut phases)?;
-    }
+    let status = match run_phases(ctx, &mut phases) {
+        Ok(status) => status,
+        Err(err) => {
+            // A broker or data failure after the run began ends it as failed,
+            // with an alert, rather than escaping as an error (R-316).
+            ctx.alerter.alert(
+                ctx.store,
+                Level::Critical,
+                failure_code(&err),
+                &format!("run {run_id} failed: {err}"),
+                None,
+                ctx.clock.now_utc(),
+            );
+            RunStatus::Failed
+        }
+    };
 
     ctx.store.finish_run(
         run_id,
@@ -76,6 +80,33 @@ pub fn run_cycle(ctx: &LiveContext) -> Result<RunOutcome, LiveError> {
         status,
         phases,
     })
+}
+
+/// Every phase of a run after it has started, by stage.
+fn run_phases(ctx: &LiveContext, phases: &mut Vec<String>) -> Result<RunStatus, LiveError> {
+    let mut status = RunStatus::Ok;
+    let wire_clock = read_only_phases(ctx, phases)?;
+
+    // Only the dry-run stage records a decision without sending it; the paper
+    // stage settles, reconciles, decides and submits.
+    let dry_run_only = ctx.gate.allows(Capability::RecordDryRun).is_ok()
+        && ctx.gate.allows(Capability::SubmitOrder).is_err();
+    if dry_run_only {
+        rebalance(ctx, &wire_clock)?;
+        phases.push("rebalance".to_string());
+    } else if ctx.gate.stage() == Stage::Paper {
+        status = paper_phases(ctx, &wire_clock, phases)?;
+    }
+    Ok(status)
+}
+
+/// The alert code for a failure: broker, feed, or a general run failure.
+fn failure_code(err: &LiveError) -> &'static str {
+    match err {
+        LiveError::Alpaca(_) => "broker_error",
+        LiveError::Data(_) => "feed_error",
+        _ => "run_failed",
+    }
 }
 
 /// The phases that only read: the calendar, bars through the last session that
