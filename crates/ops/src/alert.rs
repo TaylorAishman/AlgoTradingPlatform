@@ -98,12 +98,13 @@ impl Alerter {
         .to_string();
         let agent: ureq::Agent = ureq::Agent::config_builder()
             .timeout_global(Some(WEBHOOK_TIMEOUT))
+            .max_redirects(0)
             .build()
             .into();
         agent
             .post(url)
             .header("Content-Type", "application/json")
             .send(body)
-            .is_ok()
+            .is_ok_and(|r| r.status().is_success())
     }
 }
