@@ -316,7 +316,8 @@ impl Store {
     /// appends an `order_events` row, both in one transaction. A `None`
     /// `broker_order_id` keeps the stored one. An illegal transition is
     /// `StoreError::IllegalTransition` and writes nothing; an unknown id is
-    /// `StoreError::NotFound`.
+    /// `StoreError::NotFound`. A `filled_qty` above the order's qty or below the
+    /// stored one is `StoreError::Invalid` and writes nothing.
     pub fn set_order_state(
         &self,
         client_order_id: &str,
@@ -326,16 +327,18 @@ impl Store {
         at: DateTime<Utc>,
     ) -> Result<(), StoreError> {
         let tx = Transaction::new_unchecked(&self.conn, TransactionBehavior::Immediate)?;
-        let current: Option<(String, Option<String>)> = {
-            let mut stmt =
-                tx.prepare("SELECT state, broker_order_id FROM orders WHERE client_order_id = ?1")?;
+        let current: Option<(String, Option<String>, i64, i64)> = {
+            let mut stmt = tx.prepare(
+                "SELECT state, broker_order_id, qty, filled_qty FROM orders \
+                 WHERE client_order_id = ?1",
+            )?;
             let mut rows = stmt.query(params![client_order_id])?;
             match rows.next()? {
-                Some(r) => Some((r.get(0)?, r.get(1)?)),
+                Some(r) => Some((r.get(0)?, r.get(1)?, r.get(2)?, r.get(3)?)),
                 None => None,
             }
         };
-        let (from_text, stored_broker) =
+        let (from_text, stored_broker, order_qty, stored_filled) =
             current.ok_or_else(|| StoreError::NotFound(format!("order {client_order_id}")))?;
         let from = text_to_state(&from_text)?;
         if !transition_allowed(from, to) {
@@ -346,6 +349,16 @@ impl Store {
         }
         let broker = broker_order_id.map(str::to_string).or(stored_broker);
         let filled = to_i64(filled_qty, "filled_qty")?;
+        if filled > order_qty {
+            return Err(StoreError::Invalid(format!(
+                "filled_qty {filled} exceeds order qty {order_qty} for {client_order_id}"
+            )));
+        }
+        if filled < stored_filled {
+            return Err(StoreError::Invalid(format!(
+                "filled_qty {filled} is below the stored {stored_filled} for {client_order_id}"
+            )));
+        }
         tx.execute(
             "UPDATE orders SET state = ?1, filled_qty = ?2, broker_order_id = ?3 \
              WHERE client_order_id = ?4",
