@@ -337,4 +337,19 @@ impl Store {
         }
         Ok(out)
     }
+
+    /// The strategy family of a saved backtest, read from its run row.
+    pub fn backtest_family(&self, id: i64) -> Result<String, StoreError> {
+        match self.conn.query_row(
+            "SELECT family FROM backtest_runs WHERE id = ?1",
+            [id],
+            |r| r.get::<_, String>(0),
+        ) {
+            Ok(family) => Ok(family),
+            Err(rusqlite::Error::QueryReturnedNoRows) => {
+                Err(StoreError::NotFound(format!("backtest {id}")))
+            }
+            Err(e) => Err(e.into()),
+        }
+    }
 }
