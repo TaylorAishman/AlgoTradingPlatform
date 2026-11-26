@@ -5,7 +5,13 @@ use std::sync::Arc;
 
 use anyhow::Context;
 use chrono::Utc;
+use pt_calendar::calendar::TradingCalendar;
+use pt_core::clock::SystemClock;
 use pt_core::types::Symbol;
+use pt_gate::gate::Gate;
+use pt_live::context::LiveContext;
+use pt_live::error::LiveError;
+use pt_ops::alert::Alerter;
 use pt_ops::report::{last_ok_run_age_hours, write_status, ReportInputs};
 use pt_shadow::fidelity::{fidelity, Fidelity};
 use pt_shadow::signoff::{evaluate, write_signoff, Verdict};
@@ -71,12 +77,69 @@ pub fn halt(action: &HaltCmd) -> anyhow::Result<i32> {
     }
 }
 
-pub fn cancel_open(_args: &ConfirmArgs) -> anyhow::Result<i32> {
-    anyhow::bail!("`cancel-open` is not implemented yet")
+/// Cancel every open order at the broker and print how many cancels were sent.
+/// Exits 1 without `--yes`, before any client is built.
+pub fn cancel_open(args: &ConfirmArgs) -> anyhow::Result<i32> {
+    kill_switch(args, "cancel-open", pt_live::killswitch::cancel_open)
 }
 
-pub fn flatten(_args: &ConfirmArgs) -> anyhow::Result<i32> {
-    anyhow::bail!("`flatten` is not implemented yet")
+/// Close every position and halt, printing how many orders were sent.
+/// Exits 1 without `--yes`, before any client is built. Works while halted.
+pub fn flatten(args: &ConfirmArgs) -> anyhow::Result<i32> {
+    kill_switch(args, "flatten", pt_live::killswitch::flatten)
+}
+
+/// Require `--yes`, build the live context as `run` does, call `action` and
+/// print its count.
+fn kill_switch(
+    args: &ConfirmArgs,
+    name: &str,
+    action: fn(&LiveContext) -> Result<usize, LiveError>,
+) -> anyhow::Result<i32> {
+    if !args.yes {
+        wiring::log("error", &format!("`{name}` needs --yes to confirm"));
+        return Ok(1);
+    }
+    let cfg = wiring::load_config()?;
+    let owner = wiring::load_owner()?;
+    let keys = wiring::load_keys()?;
+    let store = open_store(&cfg.run.db_path)?;
+    let http = wiring::build_client()?;
+    let alerter = Alerter::new(
+        std::env::var("PT_ALERT_WEBHOOK_URL")
+            .ok()
+            .filter(|u| !u.is_empty())
+            .or_else(|| owner.alert_webhook_url.clone()),
+        vec![
+            keys.key_id.expose().to_string(),
+            keys.secret_key.expose().to_string(),
+        ],
+    );
+    let gate = Gate::new(owner);
+    // The kill switch only needs the strategy's id; the calendar is unused.
+    let placeholder = TradingCalendar::new(vec![cfg.data.start]).context("strategy calendar")?;
+    let strategy = Tsmom::new(
+        TsmomParams {
+            lookback_months: cfg.strategy.lookback_months.clone(),
+            risk_free_symbol: Symbol::new(&cfg.strategy.risk_free_symbol)
+                .context("strategy.risk_free_symbol")?,
+        },
+        Arc::new(placeholder),
+    );
+    let clock = SystemClock;
+    let ctx = LiveContext {
+        store: &store,
+        cfg: &cfg,
+        gate: &gate,
+        http: &http,
+        clock: &clock,
+        alerter: &alerter,
+        strategy: &strategy,
+        code_version: env!("CARGO_PKG_VERSION"),
+    };
+    let n = action(&ctx)?;
+    println!("{n}");
+    Ok(0)
 }
 
 /// Write `status.md` and `status.json` from the store. Needs no network.
