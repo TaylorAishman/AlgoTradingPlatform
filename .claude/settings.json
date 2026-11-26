@@ -40,7 +40,17 @@
       "Bash(git -C * push --force *)",
       "Bash(git -C * push -f *)",
       "Bash(git push --force *)",
-      "Bash(git push -f *)"
+      "Bash(git push -f *)",
+      "Read(**/.secrets.toml)",
+      "Read(**/*.secrets.toml)",
+      "Read(**/.env)",
+      "Read(**/.env.*)",
+      "Edit(**/.secrets.toml)",
+      "Edit(**/*.secrets.toml)",
+      "Edit(**/.env)",
+      "Edit(**/.env.*)",
+      "Bash(*.secrets.toml*)",
+      "Bash(*/.env*)"
     ]
   }
 }

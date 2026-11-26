@@ -1,0 +1,7 @@
+# Secrets: never index, read or send these to an AI model.
+# Each user keeps API keys in config/.secrets.toml (see config/secrets.example.toml).
+.secrets.toml
+*.secrets.toml
+config/.secrets.toml
+.env
+.env.*

@@ -33,6 +33,7 @@ Keep this file short. It is a map; details live in the files it points to.
 - Every commit leaves CHECK passing, so it can be reverted on its own.
 - Fix the code, not the check. Never skip or weaken a test to get green.
 - Knowledge that matters goes in the repo (design docs, this file), not in chat.
+- Never read, print, search, copy or edit `config/.secrets.toml`, any `*.secrets.toml` or `.env` file: they hold real API keys. Use fake keys in tests.
 
 ## Conventions
 
