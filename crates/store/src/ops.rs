@@ -137,7 +137,16 @@ impl Store {
             rusqlite::params![instant_to_text(at), note, id],
         )?;
         if n == 0 {
-            return Err(StoreError::NotFound(format!("active halt {id}")));
+            let exists: bool = self.conn.query_row(
+                "SELECT EXISTS(SELECT 1 FROM halts WHERE id = ?1)",
+                rusqlite::params![id],
+                |r| r.get(0),
+            )?;
+            return Err(StoreError::NotFound(if exists {
+                format!("halt {id} is already cleared")
+            } else {
+                format!("active halt {id}")
+            }));
         }
         Ok(())
     }
