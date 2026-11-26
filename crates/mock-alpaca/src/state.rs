@@ -138,6 +138,8 @@ pub struct State {
     pub denied_feeds: Vec<String>,
     /// Injected failures: (requests left, status).
     pub fail_next: Option<(u32, u16)>,
+    /// Route refusals: (method, path, requests left, status).
+    pub reject_routes: Vec<(String, String, u32, u16)>,
 }
 
 impl State {
