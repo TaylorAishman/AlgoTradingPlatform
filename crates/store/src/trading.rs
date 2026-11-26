@@ -4,7 +4,7 @@ use chrono::{DateTime, NaiveDate, NaiveTime, SecondsFormat, Utc};
 use pt_core::order_state::{transition_allowed, OrderState};
 use pt_core::types::{Positions, Side, Symbol};
 use rusqlite::{
-    params, params_from_iter, OptionalExtension, Row, Transaction, TransactionBehavior,
+    params, params_from_iter, Connection, OptionalExtension, Row, Transaction, TransactionBehavior,
 };
 use rust_decimal::Decimal;
 
@@ -442,21 +442,20 @@ impl Store {
     /// activity id is already stored (the first row is kept). A collision on
     /// any other unique index is an error.
     pub fn insert_fill(&self, f: &FillRow) -> Result<bool, StoreError> {
-        let n = self.conn.execute(
-            "INSERT INTO fills (activity_id, broker_order_id, symbol, side, qty, \
-             price, at) VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7) \
-             ON CONFLICT (activity_id) DO NOTHING",
-            params![
-                f.activity_id,
-                f.broker_order_id,
-                f.symbol.as_str(),
-                side_to_text(f.side),
-                to_i64(f.qty, "qty")?,
-                dec_to_text(f.price),
-                time_to_text(f.at),
-            ],
-        )?;
-        Ok(n == 1)
+        insert_fill_on(&self.conn, f)
+    }
+
+    /// Records a fill and its ledger entry in one transaction. Returns true
+    /// when both were written, false (and writes neither) when the activity id
+    /// is already stored. If the ledger insert fails, the fill is rolled back.
+    pub fn record_fill(&self, fill: &FillRow, entry: &LedgerEntry) -> Result<bool, StoreError> {
+        let tx = Transaction::new_unchecked(&self.conn, TransactionBehavior::Immediate)?;
+        if !insert_fill_on(&tx, fill)? {
+            return Ok(false);
+        }
+        append_ledger_on(&tx, entry)?;
+        tx.commit()?;
+        Ok(true)
     }
 
     /// All fills, in insertion order.
@@ -483,6 +482,24 @@ impl Store {
         }
         Ok(out)
     }
+}
+
+fn insert_fill_on(conn: &Connection, f: &FillRow) -> Result<bool, StoreError> {
+    let n = conn.execute(
+        "INSERT INTO fills (activity_id, broker_order_id, symbol, side, qty, \
+         price, at) VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7) \
+         ON CONFLICT (activity_id) DO NOTHING",
+        params![
+            f.activity_id,
+            f.broker_order_id,
+            f.symbol.as_str(),
+            side_to_text(f.side),
+            to_i64(f.qty, "qty")?,
+            dec_to_text(f.price),
+            time_to_text(f.at),
+        ],
+    )?;
+    Ok(n == 1)
 }
 
 /// Which ledger an entry belongs to.
@@ -517,21 +534,7 @@ pub struct LedgerEntry {
 impl Store {
     /// Appends a ledger entry and returns its id. Ids increase with insertion.
     pub fn append_ledger(&self, e: &LedgerEntry) -> Result<i64, StoreError> {
-        self.conn.execute(
-            "INSERT INTO ledger_entries (book, date, kind, symbol, qty, price, cash_delta, \
-             ref_id) VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8)",
-            params![
-                e.book.as_text(),
-                date_to_text(e.date),
-                e.kind,
-                e.symbol.as_ref().map(Symbol::as_str),
-                e.qty,
-                e.price.map(dec_to_text),
-                dec_to_text(e.cash_delta),
-                e.ref_id,
-            ],
-        )?;
-        Ok(self.conn.last_insert_rowid())
+        append_ledger_on(&self.conn, e)
     }
 
     /// The entries of one book, in insertion order.
@@ -602,6 +605,24 @@ impl Store {
             .filter(|e| e.date <= as_of)
             .fold(Decimal::ZERO, |acc, e| acc + e.cash_delta))
     }
+}
+
+fn append_ledger_on(conn: &Connection, e: &LedgerEntry) -> Result<i64, StoreError> {
+    conn.execute(
+        "INSERT INTO ledger_entries (book, date, kind, symbol, qty, price, cash_delta, \
+         ref_id) VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8)",
+        params![
+            e.book.as_text(),
+            date_to_text(e.date),
+            e.kind,
+            e.symbol.as_ref().map(Symbol::as_str),
+            e.qty,
+            e.price.map(dec_to_text),
+            dec_to_text(e.cash_delta),
+            e.ref_id,
+        ],
+    )?;
+    Ok(conn.last_insert_rowid())
 }
 
 /// One day's valuation of a book.
