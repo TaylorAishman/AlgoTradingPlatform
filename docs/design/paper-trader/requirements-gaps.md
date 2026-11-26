@@ -176,3 +176,20 @@ These came from the live-first-order, live-cycle-failures, cli-live, cli-ops and
   - R27 landed at 448 lines, over the 400-line guideline (one test file with a shared fixture).
   - cli-live took three review rounds.
   - Some agent reports (V04, V10, R26) came back as the bare word "placeholder", so the orchestrator checked the work itself.
+
+## Decisions made on 2026-11-26
+
+The owner decided these. Each needs a requirement, a test and a change in the next design.
+
+| # | Decision |
+|---|----------|
+| G-53 | The kill switch works in every stage. Risk-reducing kill-switch orders (`cancel-open`, `flatten`) bypass the stage gate, including in `first_order`. |
+| G-92 | The `[first_order]` approval gains a `qty`, which must be at least 1 and at most `max_qty`; the order is sent for `qty`. A broker reject is retried with exponential back-off, at most 5 retries. Before each retry, look up the previous client order id at the broker (as in G-55) so a held order is adopted, never duplicated. After the last retry, alert and stop. |
+| G-55 | Before a kill-switch retry under a new `-rN` id, look up the spent id at the broker; adopt the order if the broker still holds it. |
+| G-56 | When leg 1 ends Expired or Canceled after a partial fill: alert, and abandon leg 2. The shares leg 1 bought are kept. |
+| G-54 | `flatten` prints both counts: orders accepted and orders rejected. |
+| G-94 | Config validation rejects 0 for each sign-off minimum (`min_sessions`, `min_rebalances`, `min_fills`); each must be at least 1. |
+| G-05 | The daily schedule runs on US/Eastern market time, not the Mac's local zone. |
+| G-60 | `backtest run` gains `--capital`. Without it, use the paper account's current equity when keys are set; otherwise use a config value (default 100000). Log which source was used. The offline path stays network-free when no keys are set (R-393). |
+
+Still open: the section 3 confirmations (G-01 to G-04, G-50 to G-52, G-57 to G-59, G-61 to G-63, G-90, G-91, G-93).
