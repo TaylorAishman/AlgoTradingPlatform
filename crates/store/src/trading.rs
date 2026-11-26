@@ -201,30 +201,30 @@ impl Store {
     /// A second decision for the same strategy, signal date and mode is
     /// `StoreError::Duplicate`.
     pub fn insert_decision(&self, d: &DecisionRow) -> Result<i64, StoreError> {
-        let res = self.conn.execute(
-            "INSERT INTO decisions (strategy_id, signal_date, trade_date, mode, status, \
-             inputs_json, outputs_json, created_at) VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8)",
-            params![
-                d.strategy_id,
-                date_to_text(d.signal_date),
-                d.trade_date.map(date_to_text),
-                d.mode.as_text(),
-                d.status,
-                d.inputs_json,
-                d.outputs_json,
-                time_to_text(d.created_at),
-            ],
-        );
-        match res {
-            Ok(_) => Ok(self.conn.last_insert_rowid()),
-            Err(e) if is_unique_violation(&e) => Err(StoreError::Duplicate(format!(
-                "decision for {} on {} in mode {}",
-                d.strategy_id,
-                date_to_text(d.signal_date),
-                d.mode.as_text()
-            ))),
-            Err(e) => Err(e.into()),
+        insert_decision_on(&self.conn, d)
+    }
+
+    /// Inserts a decision and its orders in one transaction and returns the
+    /// decision's id. Every order is stored with that id, whatever
+    /// `decision_id` it carries. Any failure, such as a repeated
+    /// `client_order_id` (`StoreError::Duplicate`), writes neither the decision
+    /// nor any order.
+    pub fn insert_decision_with_orders(
+        &self,
+        d: &DecisionRow,
+        orders: &[OrderRow],
+    ) -> Result<i64, StoreError> {
+        let tx = Transaction::new_unchecked(&self.conn, TransactionBehavior::Immediate)?;
+        let id = insert_decision_on(&tx, d)?;
+        for o in orders {
+            let o = OrderRow {
+                decision_id: Some(id),
+                ..o.clone()
+            };
+            insert_order_on(&tx, &o)?;
         }
+        tx.commit()?;
+        Ok(id)
     }
 
     /// The decision for a strategy, signal date and mode, if one is stored.
@@ -266,50 +266,7 @@ impl Store {
     /// transaction. A repeated `client_order_id` is `StoreError::Duplicate`.
     pub fn insert_order(&self, o: &OrderRow) -> Result<(), StoreError> {
         let tx = Transaction::new_unchecked(&self.conn, TransactionBehavior::Immediate)?;
-        // The creation event is stamped with the trade date at 00:00:00 UTC: library
-        // crates read no wall clock and this signature carries no time.
-        let created_at = o.trade_date.and_time(NaiveTime::MIN).and_utc();
-        let res = tx.execute(
-            "INSERT INTO orders (client_order_id, decision_id, symbol, side, qty, leg, state, \
-             broker_order_id, filled_qty, reference_price, trade_date) \
-             VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11)",
-            params![
-                o.client_order_id,
-                o.decision_id,
-                o.symbol.as_str(),
-                side_to_text(o.side),
-                to_i64(o.qty, "qty")?,
-                i64::from(o.leg),
-                state_to_text(o.state),
-                o.broker_order_id,
-                to_i64(o.filled_qty, "filled_qty")?,
-                dec_to_text(o.reference_price),
-                date_to_text(o.trade_date),
-            ],
-        );
-        match res {
-            Ok(_) => {}
-            Err(rusqlite::Error::SqliteFailure(f, _))
-                if f.extended_code == rusqlite::ffi::SQLITE_CONSTRAINT_PRIMARYKEY =>
-            {
-                return Err(StoreError::Duplicate(format!(
-                    "order {}",
-                    o.client_order_id
-                )));
-            }
-            Err(e) => return Err(e.into()),
-        }
-        tx.execute(
-            "INSERT INTO order_events (client_order_id, from_state, to_state, filled_qty, \
-             broker_order_id, at) VALUES (?1, NULL, ?2, ?3, ?4, ?5)",
-            params![
-                o.client_order_id,
-                state_to_text(o.state),
-                to_i64(o.filled_qty, "filled_qty")?,
-                o.broker_order_id,
-                time_to_text(created_at),
-            ],
-        )?;
+        insert_order_on(&tx, o)?;
         tx.commit()?;
         Ok(())
     }
@@ -482,6 +439,81 @@ impl Store {
         }
         Ok(out)
     }
+}
+
+fn insert_decision_on(conn: &Connection, d: &DecisionRow) -> Result<i64, StoreError> {
+    let res = conn.execute(
+        "INSERT INTO decisions (strategy_id, signal_date, trade_date, mode, status, \
+         inputs_json, outputs_json, created_at) VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8)",
+        params![
+            d.strategy_id,
+            date_to_text(d.signal_date),
+            d.trade_date.map(date_to_text),
+            d.mode.as_text(),
+            d.status,
+            d.inputs_json,
+            d.outputs_json,
+            time_to_text(d.created_at),
+        ],
+    );
+    match res {
+        Ok(_) => Ok(conn.last_insert_rowid()),
+        Err(e) if is_unique_violation(&e) => Err(StoreError::Duplicate(format!(
+            "decision for {} on {} in mode {}",
+            d.strategy_id,
+            date_to_text(d.signal_date),
+            d.mode.as_text()
+        ))),
+        Err(e) => Err(e.into()),
+    }
+}
+
+fn insert_order_on(conn: &Connection, o: &OrderRow) -> Result<(), StoreError> {
+    // The creation event is stamped with the trade date at 00:00:00 UTC: library
+    // crates read no wall clock and this signature carries no time.
+    let created_at = o.trade_date.and_time(NaiveTime::MIN).and_utc();
+    let res = conn.execute(
+        "INSERT INTO orders (client_order_id, decision_id, symbol, side, qty, leg, state, \
+         broker_order_id, filled_qty, reference_price, trade_date) \
+         VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11)",
+        params![
+            o.client_order_id,
+            o.decision_id,
+            o.symbol.as_str(),
+            side_to_text(o.side),
+            to_i64(o.qty, "qty")?,
+            i64::from(o.leg),
+            state_to_text(o.state),
+            o.broker_order_id,
+            to_i64(o.filled_qty, "filled_qty")?,
+            dec_to_text(o.reference_price),
+            date_to_text(o.trade_date),
+        ],
+    );
+    match res {
+        Ok(_) => {}
+        Err(rusqlite::Error::SqliteFailure(f, _))
+            if f.extended_code == rusqlite::ffi::SQLITE_CONSTRAINT_PRIMARYKEY =>
+        {
+            return Err(StoreError::Duplicate(format!(
+                "order {}",
+                o.client_order_id
+            )));
+        }
+        Err(e) => return Err(e.into()),
+    }
+    conn.execute(
+        "INSERT INTO order_events (client_order_id, from_state, to_state, filled_qty, \
+         broker_order_id, at) VALUES (?1, NULL, ?2, ?3, ?4, ?5)",
+        params![
+            o.client_order_id,
+            state_to_text(o.state),
+            to_i64(o.filled_qty, "filled_qty")?,
+            o.broker_order_id,
+            time_to_text(created_at),
+        ],
+    )?;
+    Ok(())
 }
 
 fn insert_fill_on(conn: &Connection, f: &FillRow) -> Result<bool, StoreError> {
