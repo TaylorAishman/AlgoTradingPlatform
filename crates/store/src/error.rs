@@ -17,4 +17,6 @@ pub enum StoreError {
     NotFound(String),
     #[error("codec error: {0}")]
     Codec(String),
+    #[error("invalid input: {0}")]
+    Invalid(String),
 }
