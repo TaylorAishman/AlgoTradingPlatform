@@ -66,14 +66,43 @@ fn approved_first_order_gets_a_permit_bound_to_it() {
     assert!(!permit.matches(&order("SPY", "buy", 2)));
 }
 
+/// The R-268 approval: qty 2, max_qty 5.
+fn approval_2_of_5() -> Gate {
+    gate_with(
+        Some(FirstOrderApproval {
+            qty: 2,
+            max_qty: 5,
+            ..approval(5)
+        }),
+        Some(day(1)),
+    )
+}
+
 #[test]
-fn quantity_below_max_is_authorised() {
-    // R-268: max_qty is a ceiling.
-    let g = gate_with(Some(approval(2)), Some(day(1)));
-    assert!(g.authorize(&order("SPY", "buy", 2), &ctx()).is_ok());
-    assert!(g.authorize(&order("SPY", "buy", 1), &ctx()).is_ok());
+fn only_the_approved_quantity_is_authorised() {
+    // R-268: the permit is for exactly the approved qty; max_qty is not a
+    // ceiling the order may use.
+    let g = approval_2_of_5();
+    let permit = g
+        .authorize(&order("SPY", "buy", 2), &ctx())
+        .expect("permit");
+    assert!(permit.matches(&order("SPY", "buy", 2)));
+    for qty in [1, 3, 4, 5, 6, 0] {
+        assert_eq!(
+            g.authorize(&order("SPY", "buy", qty), &ctx()).err(),
+            Some(GateError::FirstOrderMismatch),
+            "qty {qty}"
+        );
+    }
+}
+
+#[test]
+fn quantity_equal_to_max_but_not_to_qty_is_a_mismatch() {
+    // R-268: quantity 5 (= max_qty) with approved qty 2 is refused.
     assert_eq!(
-        g.authorize(&order("SPY", "buy", 3), &ctx()).err(),
+        approval_2_of_5()
+            .authorize(&order("SPY", "buy", 5), &ctx())
+            .err(),
         Some(GateError::FirstOrderMismatch)
     );
 }

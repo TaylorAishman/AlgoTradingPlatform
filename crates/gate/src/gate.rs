@@ -204,11 +204,12 @@ impl Gate {
             return Err(GateError::FirstOrderMismatch);
         };
         // Exact comparison: no case or whitespace folding.
-        // A zero quantity is not an order the owner approved.
+        // Only the approved quantity is authorised: `max_qty` is not a ceiling
+        // for the order. A zero quantity is never approved.
         let matches = order.symbol == approved.symbol
             && order.side == approved.side
             && order.qty >= 1
-            && order.qty <= approved.max_qty
+            && order.qty == approved.qty
             && ctx.today == approved.valid_on;
         if !matches {
             return Err(GateError::FirstOrderMismatch);
