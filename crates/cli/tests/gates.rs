@@ -36,7 +36,7 @@ fn line_for<'a>(text: &'a str, id: &str) -> &'a str {
 }
 
 #[test]
-fn no_owner_file_and_no_keys_prints_backtest_and_twelve_pending_lines() {
+fn no_owner_file_and_no_keys_prints_backtest_and_thirteen_pending_lines() {
     // R-382
     let home = tempfile::tempdir().unwrap();
     let out = gates(None, home.path());
@@ -44,7 +44,7 @@ fn no_owner_file_and_no_keys_prints_backtest_and_twelve_pending_lines() {
     let text = stdout(&out);
     assert!(text.contains("stage: backtest"), "stdout: {text}");
     let lines = checklist_lines(&text);
-    assert_eq!(lines.len(), 12, "stdout: {text}");
+    assert_eq!(lines.len(), 13, "stdout: {text}");
     assert!(
         lines.iter().all(|l| l.contains("pending")),
         "stdout: {text}"

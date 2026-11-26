@@ -27,7 +27,7 @@ fn item(id: &'static str, done: bool, instruction: &'static str) -> ChecklistIte
     }
 }
 
-/// The twelve checklist items in the documented order.
+/// The thirteen checklist items in the documented order.
 pub fn gate_status(owner: &OwnerFile, facts: &Facts) -> Vec<ChecklistItem> {
     let at = |s: Stage| owner.stage >= s;
     vec![
@@ -75,6 +75,11 @@ pub fn gate_status(owner: &OwnerFile, facts: &Facts) -> Vec<ChecklistItem> {
             "stage_first_order",
             at(Stage::FirstOrder),
             "Set stage = \"first_order\" in the owner file.",
+        ),
+        item(
+            "first_order_sent",
+            facts.first_order_sent,
+            "Run the first-order command to send the approved order.",
         ),
         item(
             "strategy_allowlist",
