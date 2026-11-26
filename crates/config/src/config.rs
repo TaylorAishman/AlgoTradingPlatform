@@ -259,6 +259,21 @@ impl Default for SignoffCfg {
     }
 }
 
+/// Settings for historical backtests. Not part of the configuration hash.
+#[derive(Debug, Clone, PartialEq, Eq, Deserialize)]
+#[serde(default, deny_unknown_fields)]
+pub struct BacktestCfg {
+    pub initial_capital: Decimal,
+}
+
+impl Default for BacktestCfg {
+    fn default() -> Self {
+        Self {
+            initial_capital: Decimal::new(100_000, 0),
+        }
+    }
+}
+
 /// The whole configuration.
 #[derive(Debug, Clone, PartialEq, Eq, Deserialize)]
 #[serde(deny_unknown_fields)]
@@ -279,6 +294,8 @@ pub struct Config {
     pub cost: CostCfg,
     #[serde(default)]
     pub signoff: SignoffCfg,
+    #[serde(default)]
+    pub backtest: BacktestCfg,
     #[serde(default)]
     pub universe: Vec<Instrument>,
 }
@@ -398,6 +415,12 @@ fn validate(cfg: &Config) -> Result<(), ConfigError> {
                 "cost.shadow.impact_coeff must be 0 when data.feed is \"iex\"".into(),
             ));
         }
+    }
+    if cfg.backtest.initial_capital <= Decimal::ZERO {
+        return Err(ConfigError::Invalid(format!(
+            "backtest.initial_capital must be positive, got {}",
+            cfg.backtest.initial_capital
+        )));
     }
     if cfg.universe.is_empty() {
         return Err(ConfigError::Invalid("universe must not be empty".into()));
