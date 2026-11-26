@@ -10,6 +10,9 @@ use pt_core::view::HistoryView;
 use std::collections::BTreeMap;
 use std::sync::Arc;
 
+/// The strategy id.
+pub const ID: &str = "bh-volscaled-v1";
+
 /// Signals +1.0 for every symbol with an adjusted close on the decision date.
 #[derive(Debug, Clone)]
 pub struct LongOnly {
@@ -24,7 +27,7 @@ impl LongOnly {
 
 impl Strategy for LongOnly {
     fn id(&self) -> &str {
-        "bh-volscaled-v1"
+        ID
     }
 
     fn params_canonical(&self) -> String {

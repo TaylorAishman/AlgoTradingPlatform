@@ -10,6 +10,9 @@ use pt_core::view::HistoryView;
 use std::collections::BTreeMap;
 use std::sync::Arc;
 
+/// The strategy id.
+pub const ID: &str = "tsmom-v1";
+
 /// Parameters of [`Tsmom`].
 #[derive(Debug, Clone, PartialEq)]
 pub struct TsmomParams {
@@ -43,7 +46,7 @@ fn close_on(view: &dyn HistoryView, symbol: &Symbol, date: NaiveDate) -> Option<
 
 impl Strategy for Tsmom {
     fn id(&self) -> &str {
-        "tsmom-v1"
+        ID
     }
 
     fn params_canonical(&self) -> String {
@@ -66,6 +69,11 @@ impl Strategy for Tsmom {
         asof: NaiveDate,
         view: &dyn HistoryView,
     ) -> Result<SignalSet, StrategyError> {
+        if self.params.lookback_months.is_empty() {
+            return Err(StrategyError::Invalid(
+                "lookback_months is empty".to_string(),
+            ));
+        }
         if !self.calendar.is_session(asof) {
             return Err(StrategyError::NotASession(asof));
         }
@@ -102,7 +110,7 @@ impl Strategy for Tsmom {
                     ineligible.insert(symbol.clone(), reason);
                 }
                 None => {
-                    let n = self.params.lookback_months.len().max(1) as f64;
+                    let n = self.params.lookback_months.len() as f64;
                     signals.insert(symbol.clone(), total / n);
                 }
             }
