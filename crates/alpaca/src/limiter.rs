@@ -4,6 +4,8 @@ use std::collections::VecDeque;
 use std::sync::{Arc, Mutex};
 use std::time::{Duration, Instant};
 
+use crate::error::AlpacaError;
+
 /// Length of the sliding window.
 const WINDOW: Duration = Duration::from_secs(60);
 
@@ -62,13 +64,23 @@ pub struct RateLimiter {
 }
 
 impl RateLimiter {
-    pub fn new(max: u32, clock: Arc<dyn MonoClock>, sleeper: Arc<dyn Sleeper>) -> Self {
-        Self {
-            max: (max as usize).max(1),
+    /// A limit of 0 would never let a call through, so it is refused.
+    pub fn new(
+        max: u32,
+        clock: Arc<dyn MonoClock>,
+        sleeper: Arc<dyn Sleeper>,
+    ) -> Result<Self, AlpacaError> {
+        if max == 0 {
+            return Err(AlpacaError::Invalid(
+                "rate limit must be at least 1 request per minute".to_string(),
+            ));
+        }
+        Ok(Self {
+            max: max as usize,
             clock,
             sleeper,
             calls: Mutex::new(VecDeque::new()),
-        }
+        })
     }
 
     /// Record a call, sleeping first if the window is full.

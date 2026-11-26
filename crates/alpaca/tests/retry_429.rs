@@ -17,7 +17,7 @@ const CLOCK_BODY: &str = r#"{"timestamp":"2025-06-24T14:15:22-04:00","is_open":t
 fn client(url: &str, fake: &Arc<Fake>) -> HttpClient {
     let mono: Arc<dyn MonoClock> = fake.clone();
     let sleeper: Arc<dyn Sleeper> = fake.clone();
-    let limiter = RateLimiter::new(200, mono, sleeper.clone());
+    let limiter = RateLimiter::new(200, mono, sleeper.clone()).expect("a limit of 200 is accepted");
     let endpoints = Endpoints::with_overrides(Some(url), Some(url)).expect("loopback");
     HttpClient::new(
         endpoints,
