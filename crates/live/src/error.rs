@@ -26,6 +26,8 @@ pub enum LiveError {
     Data(#[from] DataError),
     #[error("engine error: {0}")]
     Engine(#[from] EngineError),
+    #[error("the first order was already attempted the maximum number of times")]
+    FirstOrderExhausted,
     #[error("invalid live input: {0}")]
     Invalid(String),
 }
