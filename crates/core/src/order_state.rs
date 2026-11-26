@@ -28,5 +28,6 @@ pub fn transition_allowed(from: OrderState, to: OrderState) -> bool {
                 PartiallyFilled,
                 PartiallyFilled | Filled | Canceled | Expired
             )
+            | (Rejected, Submitted)
     )
 }
