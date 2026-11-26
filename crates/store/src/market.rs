@@ -289,25 +289,48 @@ impl Store {
         TradingCalendar::new(dates).map_err(|e| StoreError::Codec(e.to_string()))
     }
 
-    /// Stores an asset snapshot fetched at `fetched_at`. A snapshot for the
-    /// same symbol and instant is replaced.
+    /// Stores an asset snapshot fetched at `fetched_at`. The first snapshot for
+    /// a symbol and instant is kept: an identical repeat is accepted, a
+    /// different one is `StoreError::Duplicate`.
     pub fn put_asset_snapshot(
         &self,
         snapshot: &AssetSnapshot,
         fetched_at: DateTime<Utc>,
     ) -> Result<(), StoreError> {
-        self.conn.execute(
-            "INSERT OR REPLACE INTO asset_snapshots
+        let at = instant_text(fetched_at);
+        let changed = self.conn.execute(
+            "INSERT OR IGNORE INTO asset_snapshots
              (symbol, fetched_at, tradable, shortable, easy_to_borrow)
              VALUES (?1, ?2, ?3, ?4, ?5)",
             params![
                 snapshot.symbol.as_str(),
-                instant_text(fetched_at),
+                at,
                 snapshot.tradable,
                 snapshot.shortable,
                 snapshot.easy_to_borrow,
             ],
         )?;
+        if changed == 0 {
+            let same: bool = self.conn.query_row(
+                "SELECT tradable = ?3 AND shortable = ?4 AND easy_to_borrow = ?5
+                 FROM asset_snapshots WHERE symbol = ?1 AND fetched_at = ?2",
+                params![
+                    snapshot.symbol.as_str(),
+                    at,
+                    snapshot.tradable,
+                    snapshot.shortable,
+                    snapshot.easy_to_borrow,
+                ],
+                |r| r.get(0),
+            )?;
+            if !same {
+                return Err(StoreError::Duplicate(format!(
+                    "asset snapshot for {} at {}",
+                    snapshot.symbol.as_str(),
+                    at
+                )));
+            }
+        }
         Ok(())
     }
 
