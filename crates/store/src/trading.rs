@@ -3,7 +3,9 @@
 use chrono::{DateTime, NaiveDate, NaiveTime, SecondsFormat, Utc};
 use pt_core::order_state::{transition_allowed, OrderState};
 use pt_core::types::{Positions, Side, Symbol};
-use rusqlite::{params, params_from_iter, Row, Transaction, TransactionBehavior};
+use rusqlite::{
+    params, params_from_iter, OptionalExtension, Row, Transaction, TransactionBehavior,
+};
 use rust_decimal::Decimal;
 
 use crate::codec::{dec_to_text, text_to_dec};
@@ -389,6 +391,34 @@ impl Store {
             Some(r) => Ok(Some(order_from_row(r)?)),
             None => Ok(None),
         }
+    }
+
+    /// Mark an order as outside the paper ledger. Marking twice is fine.
+    /// `StoreError::NotFound` for an unknown id.
+    pub fn mark_off_ledger(&self, client_order_id: &str) -> Result<(), StoreError> {
+        let n = self.conn.execute(
+            "UPDATE orders SET off_ledger = 1 WHERE client_order_id = ?1",
+            params![client_order_id],
+        )?;
+        if n == 0 {
+            return Err(StoreError::NotFound(format!("order {client_order_id}")));
+        }
+        Ok(())
+    }
+
+    /// Whether the order is marked outside the paper ledger.
+    /// `StoreError::NotFound` for an unknown id.
+    pub fn is_off_ledger(&self, client_order_id: &str) -> Result<bool, StoreError> {
+        let flag: Option<i64> = self
+            .conn
+            .query_row(
+                "SELECT off_ledger FROM orders WHERE client_order_id = ?1",
+                params![client_order_id],
+                |r| r.get(0),
+            )
+            .optional()?;
+        flag.map(|f| f != 0)
+            .ok_or_else(|| StoreError::NotFound(format!("order {client_order_id}")))
     }
 
     /// Orders whose state is one of `states`, in insertion order. Empty input gives empty output.
