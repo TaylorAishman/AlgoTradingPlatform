@@ -4,16 +4,30 @@ use crate::error::StatsError;
 
 /// Number of ways to choose half of `partitions` blocks: the binomial coefficient C(s, s/2).
 ///
-/// `partitions` is expected to be even; an odd count uses `s / 2` rounded down.
-pub fn n_combinations(partitions: usize) -> u64 {
-    let k = (partitions / 2) as u64;
-    let n = partitions as u64;
-    let mut result: u64 = 1;
+/// `partitions` must be even and at least 2, else `InvalidPartition`; a count too large for a
+/// `u64` is `OutOfDomain`.
+pub fn n_combinations(partitions: usize) -> Result<u64, StatsError> {
+    if partitions == 0 || !partitions.is_multiple_of(2) {
+        return Err(StatsError::InvalidPartition(format!(
+            "partition count must be a positive even number, got {partitions}"
+        )));
+    }
+    let overflow = || {
+        StatsError::OutOfDomain(format!(
+            "number of combinations for {partitions} partitions does not fit in a u64"
+        ))
+    };
+    let k = (partitions / 2) as u128;
+    let n = partitions as u128;
+    let mut result: u128 = 1;
     for i in 1..=k {
         // result * (n - k + i) is always divisible by i at this point.
-        result = result * (n - k + i) / i;
+        result = result.checked_mul(n - k + i).ok_or_else(overflow)? / i;
+        if result > u128::from(u64::MAX) {
+            return Err(overflow());
+        }
     }
-    result
+    u64::try_from(result).map_err(|_| overflow())
 }
 
 /// Result of a CSCV run.
@@ -133,7 +147,7 @@ pub fn pbo_cscv(returns: &[Vec<f64>], partitions: usize) -> Result<PboResult, St
     let mut idx: Vec<usize> = (0..half).collect();
     let mut mask = vec![false; partitions];
     let mut oos = vec![0.0; cols];
-    let mut logits = Vec::with_capacity(usize::try_from(n_combinations(partitions)).unwrap_or(0));
+    let mut logits = Vec::with_capacity(usize::try_from(n_combinations(partitions)?).unwrap_or(0));
     loop {
         mask.iter_mut().for_each(|m| *m = false);
         for &b in &idx {
