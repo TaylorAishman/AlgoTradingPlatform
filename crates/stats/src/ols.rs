@@ -14,6 +14,8 @@ pub struct Ols {
 }
 
 /// Regress `y` on `x`. Needs at least three points and a non-constant `x`.
+/// Errors with `OutOfDomain` when a result field would not be finite, such as
+/// the t-statistic of a perfect fit.
 pub fn ols(y: &[f64], x: &[f64]) -> Result<Ols, StatsError> {
     let n = y.len();
     if n < 3 || x.len() != n {
@@ -44,6 +46,11 @@ pub fn ols(y: &[f64], x: &[f64]) -> Result<Ols, StatsError> {
     let se_alpha = (s2 * (1.0 / nf + mx * mx / sxx)).sqrt();
     let alpha_t = alpha / se_alpha;
     let r2 = if syy > 0.0 { 1.0 - sse / syy } else { 0.0 };
+    if ![alpha, beta, alpha_t, r2].iter().all(|v| v.is_finite()) {
+        return Err(StatsError::OutOfDomain(
+            "regression result is not finite".to_string(),
+        ));
+    }
     Ok(Ols {
         alpha,
         beta,
