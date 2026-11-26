@@ -140,6 +140,8 @@ pub struct State {
     pub fail_next: Option<(u32, u16)>,
     /// Route refusals: (method, path, requests left, status).
     pub reject_routes: Vec<(String, String, u32, u16)>,
+    /// Status for the next order POST, which is answered with it but still held.
+    pub reject_keep: Option<u16>,
 }
 
 impl State {

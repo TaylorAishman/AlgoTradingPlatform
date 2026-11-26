@@ -29,6 +29,11 @@ fn times_two(cash: &str) -> String {
 /// Answer a request from the seeded state; anything unseeded is 404.
 pub fn respond(req: &Recorded, state: &mut State) -> (u16, String) {
     if req.method == "POST" && req.path == "/v2/orders" {
+        if let Some(code) = state.reject_keep.take() {
+            // Hold the order as if accepted, but answer with the error.
+            submit(&req.body, state);
+            return (code, r#"{"message":"injected failure"}"#.to_string());
+        }
         return submit(&req.body, state);
     }
     if req.method == "DELETE" {

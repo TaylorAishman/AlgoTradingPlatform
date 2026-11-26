@@ -310,6 +310,15 @@ impl MockAlpaca {
         }
     }
 
+    /// Answer the next order POST with `status` but still hold the order, as a
+    /// broker that accepted it and then failed the response would.
+    pub fn reject_but_keep_next_order(&self, status: u16) {
+        self.state
+            .lock()
+            .unwrap_or_else(|e| e.into_inner())
+            .reject_keep = Some(status);
+    }
+
     /// Every request received so far, oldest first.
     pub fn requests(&self) -> Vec<Recorded> {
         self.state
