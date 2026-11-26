@@ -16,6 +16,8 @@ use pt_live::cycle::{run_cycle, RunStatus};
 use pt_live::error::LiveError;
 use pt_live::lock::acquire_run_lock;
 use pt_ops::alert::Alerter;
+use pt_ops::report::{write_status, ReportInputs};
+use pt_shadow::{daily, slippage};
 use pt_store::db::Store;
 use pt_strategy::error::StrategyError;
 use pt_strategy::strategy::Strategy;
@@ -116,6 +118,8 @@ pub fn run() -> anyhow::Result<i32> {
             keys.secret_key.expose().to_string(),
         ],
     );
+    let stage = wiring::stage_name(owner.stage);
+    let signoff = owner.validation_signoff.clone();
     let gate = Gate::new(owner);
     let params = TsmomParams {
         lookback_months: cfg.strategy.lookback_months.clone(),
@@ -136,6 +140,25 @@ pub fn run() -> anyhow::Result<i32> {
         code_version: CODE_VERSION,
     };
     let outcome = run_cycle(&ctx)?;
+    // Still holding the lock: compare with the shadow, then write the report.
+    // A failure here is logged and does not change the cycle's exit code.
+    if let Err(e) = daily::update(&store, &cfg) {
+        wiring::log("error", &format!("shadow comparison failed: {e}"));
+    }
+    if let Err(e) = slippage::record_slippage(&store, &cfg) {
+        wiring::log("error", &format!("recording slippage failed: {e}"));
+    }
+    let report = ReportInputs {
+        store: &store,
+        cfg: &cfg,
+        stage,
+        fidelity: &[],
+        validation_signoff: signoff.as_deref(),
+        now: chrono::Utc::now(),
+    };
+    if let Err(e) = write_status(&report) {
+        wiring::log("error", &format!("writing the report failed: {e}"));
+    }
     let status = match outcome.status {
         RunStatus::Ok => "ok",
         RunStatus::Halted => "halted",
