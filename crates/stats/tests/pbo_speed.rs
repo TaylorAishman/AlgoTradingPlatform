@@ -22,8 +22,8 @@ fn seeded(rows: usize, cols: usize) -> Vec<Vec<f64>> {
 // R-244: the combination count is the binomial coefficient.
 #[test]
 fn combination_counts_are_binomial() {
-    assert_eq!(n_combinations(4), 6);
-    assert_eq!(n_combinations(16), 12870);
+    assert_eq!(n_combinations(4), Ok(6));
+    assert_eq!(n_combinations(16), Ok(12870));
 }
 
 // R-244: s = 16 on a seeded 2520 x 20 matrix returns 12870 logits in under 10 seconds.

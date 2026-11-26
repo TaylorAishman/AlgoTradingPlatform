@@ -26,6 +26,11 @@ pub fn psr(sr: f64, t: usize, skew: f64, kurt: f64, sr_benchmark: f64) -> Result
     if t < 2 {
         return Err(StatsError::TooFewObservations);
     }
+    if ![sr, skew, kurt, sr_benchmark].iter().all(|v| v.is_finite()) {
+        return Err(StatsError::OutOfDomain(
+            "inputs must be finite numbers".to_string(),
+        ));
+    }
     let variance_term = 1.0 - skew * sr + (kurt - 1.0) / 4.0 * sr * sr;
     if variance_term.is_nan() || variance_term <= 0.0 {
         return Err(StatsError::OutOfDomain(format!(
@@ -46,5 +51,10 @@ pub fn deflated_sharpe(
     var_sr: f64,
     n_trials: u32,
 ) -> Result<f64, StatsError> {
+    if !var_sr.is_finite() {
+        return Err(StatsError::OutOfDomain(
+            "inputs must be finite numbers".to_string(),
+        ));
+    }
     psr(sr, t, skew, kurt, expected_max_sharpe(var_sr, n_trials))
 }
