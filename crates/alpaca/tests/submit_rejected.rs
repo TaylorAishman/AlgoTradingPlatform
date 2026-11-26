@@ -20,7 +20,7 @@ const REPLY: &str = r#"{"id":"b9","client_order_id":"pt-a-1","symbol":"SPY","sid
 fn client(url: &str, fake: &Arc<Fake>) -> HttpClient {
     let mono: Arc<dyn MonoClock> = fake.clone();
     let sleeper: Arc<dyn Sleeper> = fake.clone();
-    let limiter = RateLimiter::new(200, mono, sleeper.clone());
+    let limiter = RateLimiter::new(200, mono, sleeper.clone()).expect("a limit of 200 is accepted");
     let endpoints = Endpoints::with_overrides(Some(url), Some(url)).expect("loopback");
     HttpClient::new(
         endpoints,

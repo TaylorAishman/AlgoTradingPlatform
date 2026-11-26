@@ -45,7 +45,7 @@ impl Sleeper for NoSleep {
 pub fn loopback_client(url: &str) -> Result<HttpClient, AlpacaError> {
     let endpoints = Endpoints::with_overrides(Some(url), Some(url))?;
     let sleeper: Arc<dyn Sleeper> = Arc::new(NoSleep);
-    let limiter = RateLimiter::new(u32::MAX, Arc::new(SystemClock::new()), sleeper.clone());
+    let limiter = RateLimiter::new(u32::MAX, Arc::new(SystemClock::new()), sleeper.clone())?;
     let creds = Credentials::new("loopback-key".to_string(), "loopback-secret".to_string());
     Ok(HttpClient::new(endpoints, creds, limiter, sleeper))
 }

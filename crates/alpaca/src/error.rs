@@ -23,4 +23,6 @@ pub enum AlpacaError {
     Parse(String),
     #[error("transport error: {0}")]
     Transport(String),
+    #[error("invalid argument: {0}")]
+    Invalid(String),
 }

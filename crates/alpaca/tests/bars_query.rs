@@ -18,7 +18,7 @@ fn client(trading: &str, data: &str) -> HttpClient {
     let fake = Fake::new();
     let mono: Arc<dyn MonoClock> = fake.clone();
     let sleeper: Arc<dyn Sleeper> = fake.clone();
-    let limiter = RateLimiter::new(200, mono, sleeper.clone());
+    let limiter = RateLimiter::new(200, mono, sleeper.clone()).expect("a limit of 200 is accepted");
     let endpoints = Endpoints::with_overrides(Some(trading), Some(data)).expect("loopback");
     HttpClient::new(
         endpoints,
