@@ -192,4 +192,4 @@ The owner decided these. Each needs a requirement, a test and a change in the ne
 | G-05 | The daily schedule runs on US/Eastern market time, not the Mac's local zone. |
 | G-60 | `backtest run` gains `--capital`. Without it, use the paper account's current equity when keys are set; otherwise use a config value (default 100000). Log which source was used. The offline path stays network-free when no keys are set (R-393). |
 
-Still open: the section 3 confirmations (G-01 to G-04, G-50 to G-52, G-57 to G-59, G-61 to G-63, G-90, G-91, G-93).
+Accepted as they are (owner, 2026-11-26): G-01 to G-04, G-50 to G-52, G-57 to G-59, G-61 to G-63, G-90, G-91 and G-93. The next design writes the current behaviour into requirements and pins it with tests.
