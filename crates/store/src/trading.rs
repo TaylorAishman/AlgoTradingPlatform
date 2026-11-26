@@ -396,11 +396,13 @@ impl Store {
     }
 
     /// Records a fill. Returns true when a row was inserted, false when the
-    /// activity id is already stored (the first row is kept).
+    /// activity id is already stored (the first row is kept). A collision on
+    /// any other unique index is an error.
     pub fn insert_fill(&self, f: &FillRow) -> Result<bool, StoreError> {
         let n = self.conn.execute(
-            "INSERT OR IGNORE INTO fills (activity_id, broker_order_id, symbol, side, qty, \
-             price, at) VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7)",
+            "INSERT INTO fills (activity_id, broker_order_id, symbol, side, qty, \
+             price, at) VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7) \
+             ON CONFLICT (activity_id) DO NOTHING",
             params![
                 f.activity_id,
                 f.broker_order_id,
