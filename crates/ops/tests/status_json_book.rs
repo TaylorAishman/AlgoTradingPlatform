@@ -205,3 +205,37 @@ fn generated_at_is_the_report_time() {
     let got: DateTime<Utc> = v["generated_at"].as_str().unwrap().parse().unwrap();
     assert_eq!(got, now());
 }
+
+// R-356: a value whose base equity is zero is written as null; the others stay numbers.
+#[test]
+fn pnl_value_with_a_zero_base_is_null_in_the_json() {
+    let dir = tempfile::tempdir().unwrap();
+    let cfg = config(dir.path());
+    let store = Store::open_in_memory().unwrap();
+    for (date, equity) in [
+        (NaiveDate::from_ymd_opt(2026, 2, 27).unwrap(), "100"),
+        (NaiveDate::from_ymd_opt(2026, 3, 2).unwrap(), "0"),
+        (NaiveDate::from_ymd_opt(2026, 3, 3).unwrap(), "50"),
+    ] {
+        store
+            .put_equity_snapshot(&EquitySnapshot {
+                book: Book::Paper,
+                date,
+                cash: dec(equity),
+                positions_value: dec("0"),
+                equity: dec(equity),
+                recorded_at: now(),
+            })
+            .unwrap();
+    }
+    let v = report(&store, &cfg);
+    let p = v["pnl"].as_object().expect("pnl is an object");
+    assert!(p["day"].is_null(), "day: {}", p["day"]);
+    for k in ["mtd", "ytd", "inception"] {
+        let x = match &p[k] {
+            Value::String(s) => dec(s),
+            other => dec(&other.to_string()),
+        };
+        assert_eq!(x, dec("-0.5"), "{k}");
+    }
+}

@@ -36,8 +36,8 @@ fn date_after_the_last_snapshot_is_none() {
 fn single_snapshot_at_its_date_is_all_zero() {
     let s = vec![(d(2026, 3, 2), Decimal::from(100))];
     let p = pnl(&s, d(2026, 3, 2)).expect("snapshot exists");
-    assert_eq!(p.day, Decimal::ZERO);
-    assert_eq!(p.mtd, Decimal::ZERO);
-    assert_eq!(p.ytd, Decimal::ZERO);
-    assert_eq!(p.inception, Decimal::ZERO);
+    assert_eq!(p.day, Some(Decimal::ZERO));
+    assert_eq!(p.mtd, Some(Decimal::ZERO));
+    assert_eq!(p.ytd, Some(Decimal::ZERO));
+    assert_eq!(p.inception, Some(Decimal::ZERO));
 }
