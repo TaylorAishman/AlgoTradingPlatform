@@ -1,12 +1,17 @@
 //! `halt`, `cancel-open`, `flatten`, `report`, `status` and `signoff` commands (stubs).
 
 use std::path::Path;
+use std::sync::Arc;
 
 use anyhow::Context;
 use chrono::Utc;
+use pt_core::types::Symbol;
 use pt_ops::report::{last_ok_run_age_hours, write_status, ReportInputs};
+use pt_shadow::fidelity::{fidelity, Fidelity};
+use pt_shadow::signoff::{evaluate, write_signoff, Verdict};
 use pt_store::db::Store;
 use pt_store::error::StoreError;
+use pt_strategy::tsmom::{Tsmom, TsmomParams};
 
 use crate::cli::{ConfirmArgs, HaltCmd, SignoffCmd};
 use crate::wiring;
@@ -124,6 +129,55 @@ pub fn status(max_age_hours: Option<u64>) -> anyhow::Result<i32> {
     }
 }
 
-pub fn signoff(_action: &SignoffCmd) -> anyhow::Result<i32> {
-    anyhow::bail!("`signoff` is not implemented yet")
+/// Compute the fidelity summary, judge it and write `signoff.md`. Needs no
+/// network. Prints the verdict and exits 0, whatever the verdict.
+///
+/// With no stored calendar nothing has been recorded, so the sample is empty
+/// and the verdict is `NOT_READY`.
+pub fn signoff(action: &SignoffCmd) -> anyhow::Result<i32> {
+    match action {
+        SignoffCmd::Report => signoff_report(),
+    }
+}
+
+fn signoff_report() -> anyhow::Result<i32> {
+    let cfg = wiring::load_config()?;
+    let store = open_store(&cfg.run.db_path)?;
+    let f = match store.calendar() {
+        // No calendar means nothing has been stored: the sample is empty.
+        Err(StoreError::NotFound(_)) => Fidelity {
+            n_sessions: 0,
+            n_rebalances: 0,
+            n_fills: 0,
+            replay_mismatches: 0,
+            reconciliation_breaks: 0,
+            missed_sessions: 0,
+            late_rebalances: 0,
+            mean_slippage_bps: 0.0,
+            mean_diff_bps: 0.0,
+            max_abs_diff_bps: 0.0,
+        },
+        Err(e) => return Err(e.into()),
+        Ok(calendar) => {
+            let params = TsmomParams {
+                lookback_months: cfg.strategy.lookback_months.clone(),
+                risk_free_symbol: Symbol::new(&cfg.strategy.risk_free_symbol)
+                    .context("strategy.risk_free_symbol")?,
+            };
+            let strategy = Tsmom::new(params, Arc::new(calendar));
+            fidelity(&store, &cfg, &strategy)?
+        }
+    };
+    let report = evaluate(&f, &cfg);
+    let out_dir = Path::new(&cfg.run.output_dir);
+    std::fs::create_dir_all(out_dir).with_context(|| format!("creating {}", out_dir.display()))?;
+    let path = write_signoff(&report, out_dir)?;
+    let word = match report.verdict {
+        Verdict::Pass => "PASS",
+        Verdict::Fail => "FAIL",
+        Verdict::NotReady => "NOT_READY",
+    };
+    println!("{word}");
+    println!("wrote {}", path.display());
+    Ok(0)
 }
