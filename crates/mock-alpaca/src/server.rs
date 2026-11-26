@@ -107,6 +107,14 @@ impl MockAlpaca {
             .account_cash = Some(cash.to_string());
     }
 
+    /// Seed the margin multiplier served at `/v2/account` (default "2").
+    pub fn seed_account_multiplier(&self, multiplier: &str) {
+        self.state
+            .lock()
+            .unwrap_or_else(|e| e.into_inner())
+            .account_multiplier = Some(multiplier.to_string());
+    }
+
     /// Set the clock served at `/v2/clock`.
     pub fn set_clock(&self, timestamp: &str, is_open: bool, next_open: &str, next_close: &str) {
         self.state.lock().unwrap_or_else(|e| e.into_inner()).clock = Some(Clock {

@@ -51,13 +51,14 @@ pub fn respond(req: &Recorded, state: &mut State) -> (u16, String) {
         match req.path.as_str() {
             "/v2/account" => {
                 if let Some(cash) = &state.account_cash {
+                    let multiplier = state.account_multiplier.as_deref().unwrap_or("2");
                     let body = json!({
                         "cash": cash,
                         "equity": cash,
                         "last_equity": cash,
                         "buying_power": times_two(cash),
                         "status": "ACTIVE",
-                        "multiplier": "2",
+                        "multiplier": multiplier,
                         "shorting_enabled": true,
                         "trading_blocked": false,
                         "account_blocked": false,

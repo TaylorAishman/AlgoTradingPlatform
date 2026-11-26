@@ -123,6 +123,8 @@ pub struct State {
     pub requests: Vec<Recorded>,
     /// Seeded cash, served as both cash and equity.
     pub account_cash: Option<String>,
+    /// Seeded margin multiplier; `None` serves "2".
+    pub account_multiplier: Option<String>,
     pub clock: Option<Clock>,
     /// Seeded session dates (YYYY-MM-DD), served by `/v2/calendar`.
     pub sessions: Vec<String>,
