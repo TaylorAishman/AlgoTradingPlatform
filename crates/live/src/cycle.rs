@@ -5,6 +5,7 @@
 
 use pt_alpaca::reference::{clock, WireClock};
 use pt_config::hash::config_hash;
+use pt_core::order_state::OrderState;
 use pt_data::ingest::ingest;
 use pt_data::reference::{sync_assets, sync_calendar};
 use pt_gate::gate::{AuthContext, Capability};
@@ -13,6 +14,7 @@ use pt_ops::alert::Level;
 
 use crate::context::LiveContext;
 use crate::error::LiveError;
+use crate::first_order::first_order;
 use crate::rebalance::{rebalance, RebalanceOutcome};
 use crate::reconcile::reconcile;
 use crate::settle::settle;
@@ -87,13 +89,16 @@ fn run_phases(ctx: &LiveContext, phases: &mut Vec<String>) -> Result<RunStatus, 
     let mut status = RunStatus::Ok;
     let wire_clock = read_only_phases(ctx, phases)?;
 
-    // Only the dry-run stage records a decision without sending it; the paper
-    // stage settles, reconciles, decides and submits.
+    // Only the dry-run stage records a decision without sending it; the
+    // first-order stage settles, reconciles and sends the one approved order;
+    // the paper stage settles, reconciles, decides and submits.
     let dry_run_only = ctx.gate.allows(Capability::RecordDryRun).is_ok()
         && ctx.gate.allows(Capability::SubmitOrder).is_err();
     if dry_run_only {
         rebalance(ctx, &wire_clock)?;
         phases.push("rebalance".to_string());
+    } else if ctx.gate.stage() == Stage::FirstOrder {
+        status = first_order_phases(ctx, &wire_clock, phases)?;
     } else if ctx.gate.stage() == Stage::Paper {
         status = paper_phases(ctx, &wire_clock, phases)?;
     }
@@ -133,28 +138,23 @@ fn read_only_phases(ctx: &LiveContext, phases: &mut Vec<String>) -> Result<WireC
     Ok(wire_clock)
 }
 
-/// The paper-stage phases, after the read-only ones: settle what is open,
-/// reconcile with the broker, snapshot the sessions without a snapshot, check
-/// the equity halts, decide the rebalance and submit the planned orders. Each
-/// is pushed once it has finished.
-///
-/// An unclean reconciliation or any active halt ends the run as `Halted`
-/// before anything is decided or sent (D-15, D-21). A rebalance that finds the
-/// data not ready ends it as `DataNotReady`; one that is deferred or skipped as
-/// late has no orders to send. Otherwise submission sends every stored
-/// `Intent`, including any a stopped run left behind (D-20).
-fn paper_phases(
+/// The phases that guard any submission: settle what is open, reconcile with
+/// the broker, snapshot the sessions without a snapshot and check the equity
+/// halts. Each is pushed once it has finished. Returns `Some(Halted)` when an
+/// unclean reconciliation or an active halt must end the run before anything
+/// is decided or sent (D-15, D-21).
+fn guard_phases(
     ctx: &LiveContext,
     wire_clock: &WireClock,
     phases: &mut Vec<String>,
-) -> Result<RunStatus, LiveError> {
+) -> Result<Option<RunStatus>, LiveError> {
     settle(ctx)?;
     phases.push("settle".to_string());
 
     let report = reconcile(ctx)?;
     phases.push("reconcile".to_string());
     if !report.clean {
-        return Ok(RunStatus::Halted);
+        return Ok(Some(RunStatus::Halted));
     }
 
     let calendar = ctx.store.calendar()?;
@@ -166,7 +166,74 @@ fn paper_phases(
     check_halts(ctx)?;
     phases.push("halts".to_string());
     if !ctx.store.active_halts()?.is_empty() {
-        return Ok(RunStatus::Halted);
+        return Ok(Some(RunStatus::Halted));
+    }
+    Ok(None)
+}
+
+/// The first-order-stage phases, after the read-only ones: the guard phases,
+/// then the owner's approved order is planned and sent through the gate's
+/// first-order authorisation (R-319). No rebalance decision is written, and
+/// the gate refuses any order other than the approved one, or a second one.
+fn first_order_phases(
+    ctx: &LiveContext,
+    wire_clock: &WireClock,
+    phases: &mut Vec<String>,
+) -> Result<RunStatus, LiveError> {
+    if let Some(status) = guard_phases(ctx, wire_clock, phases)? {
+        return Ok(status);
+    }
+
+    // Read before planning, so the order planned by this run is not counted.
+    let already_sent = first_order_sent(ctx)?;
+    first_order(ctx, wire_clock)?;
+    phases.push("first_order".to_string());
+
+    let auth = AuthContext {
+        strategy_id: ctx.strategy.id().to_string(),
+        today: trade_session(wire_clock),
+        halted: false,
+        risk_reducing: false,
+        is_first_order: true,
+        first_order_already_sent: already_sent,
+    };
+    submit_planned(ctx, &auth)?;
+    phases.push("submit".to_string());
+    Ok(RunStatus::Ok)
+}
+
+/// Whether a first order has ever reached the broker: any stored first-order
+/// id in a state past `Intent` that a POST produced.
+fn first_order_sent(ctx: &LiveContext) -> Result<bool, LiveError> {
+    let sent = ctx.store.orders_in_states(&[
+        OrderState::Submitted,
+        OrderState::PartiallyFilled,
+        OrderState::Filled,
+        OrderState::Canceled,
+        OrderState::Expired,
+        OrderState::Rejected,
+    ])?;
+    Ok(sent
+        .iter()
+        .any(|o| o.client_order_id.starts_with("pt-first-")))
+}
+
+/// The paper-stage phases, after the read-only ones: the guard phases, then
+/// decide the rebalance and submit the planned orders. Each is pushed once it
+/// has finished.
+///
+/// An unclean reconciliation or any active halt ends the run as `Halted`
+/// before anything is decided or sent (D-15, D-21). A rebalance that finds the
+/// data not ready ends it as `DataNotReady`; one that is deferred or skipped as
+/// late has no orders to send. Otherwise submission sends every stored
+/// `Intent`, including any a stopped run left behind (D-20).
+fn paper_phases(
+    ctx: &LiveContext,
+    wire_clock: &WireClock,
+    phases: &mut Vec<String>,
+) -> Result<RunStatus, LiveError> {
+    if let Some(status) = guard_phases(ctx, wire_clock, phases)? {
+        return Ok(status);
     }
 
     let outcome = rebalance(ctx, wire_clock)?;
