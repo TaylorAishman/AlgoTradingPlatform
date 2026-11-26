@@ -30,6 +30,7 @@ account_flat_confirmed_on = 2026-12-01
 [first_order]
 symbol = "SPY"
 side = "buy"
+qty = 1
 max_qty = 1
 valid_on = 2026-12-02
 "#,
@@ -42,6 +43,7 @@ valid_on = 2026-12-02
     let first = owner.first_order.expect("first_order table is loaded");
     assert_eq!(first.symbol, "SPY");
     assert_eq!(first.side, "buy");
+    assert_eq!(first.qty, 1);
     assert_eq!(first.max_qty, 1);
     assert_eq!(first.valid_on, date(2026, 12, 2));
     assert_eq!(owner.validation_signoff, None);
@@ -110,6 +112,7 @@ stage = "first_order"
 [first_order]
 symbol = "SPY"
 side = "buy"
+qty = 1
 max_qty = 1
 valid_on = 2026-12-02
 foo = 1
