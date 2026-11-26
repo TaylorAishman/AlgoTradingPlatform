@@ -5,6 +5,7 @@ use crate::replay::replay_decision;
 use pt_config::config::Config;
 use pt_engine::decision::record_from_json;
 use pt_store::db::Store;
+use pt_store::error::StoreError;
 use pt_store::trading::{Book, Mode};
 use pt_strategy::strategy::Strategy;
 
@@ -51,6 +52,25 @@ pub fn fidelity(
     cfg: &Config,
     strategy: &dyn Strategy,
 ) -> Result<Fidelity, ShadowError> {
+    let calendar = match store.calendar() {
+        Ok(calendar) => calendar,
+        // A store that has not stored a calendar yet has nothing to measure.
+        Err(StoreError::NotFound(_)) => {
+            return Ok(Fidelity {
+                n_sessions: 0,
+                n_rebalances: 0,
+                n_fills: 0,
+                replay_mismatches: 0,
+                reconciliation_breaks: 0,
+                missed_sessions: 0,
+                late_rebalances: 0,
+                mean_slippage_bps: 0.0,
+                mean_diff_bps: 0.0,
+                max_abs_diff_bps: 0.0,
+            })
+        }
+        Err(e) => return Err(e.into()),
+    };
     let days = store.shadow_days()?;
     let diffs: Vec<f64> = days.iter().map(|d| d.diff * 10_000.0).collect();
     let slippage: Vec<f64> = store.slippage_rows()?.iter().map(|r| r.bps).collect();
@@ -63,7 +83,6 @@ pub fn fidelity(
         }
     }
 
-    let calendar = store.calendar()?;
     let mut late_rebalances = 0;
     for row in &decisions {
         if row.status == "skipped_late" {
