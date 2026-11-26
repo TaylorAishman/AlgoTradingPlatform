@@ -6,7 +6,7 @@ use pt_store::error::StoreError;
 
 #[test]
 fn family_round_trips_for_two_saved_backtests() {
-    // D27, R-391
+    // D27, R-391, R-431
     let store = Store::open_in_memory().unwrap();
     let at = Utc.with_ymd_and_hms(2024, 2, 1, 12, 0, 0).unwrap();
     let first = store.save_backtest("tsmom-v1", "h1", "c", &[], at).unwrap();
@@ -29,7 +29,7 @@ fn family_is_readable_for_a_run_with_empty_equity() {
 
 #[test]
 fn unknown_backtest_family_is_not_found() {
-    // D27
+    // D27, R-431
     let store = Store::open_in_memory().unwrap();
     assert!(matches!(
         store.backtest_family(999),
