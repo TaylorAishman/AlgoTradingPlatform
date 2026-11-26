@@ -17,6 +17,7 @@ const MIGRATIONS: &[&str] = &[
     include_str!("../migrations/0002_trading.sql"),
     include_str!("../migrations/0003_ops.sql"),
     include_str!("../migrations/0004_append_only.sql"),
+    include_str!("../migrations/0005_fixes.sql"),
 ];
 
 impl From<rusqlite::Error> for StoreError {
