@@ -599,43 +599,44 @@ impl Store {
 
     /// Net quantity per symbol in a book; symbols with a net of zero are absent.
     pub fn positions(&self, book: Book) -> Result<Positions, StoreError> {
-        let mut out = Positions::new();
-        for e in self.ledger(book)? {
-            if let Some(s) = e.symbol {
-                *out.entry(s).or_insert(0) += e.qty;
-            }
-        }
-        out.retain(|_, q| *q != 0);
-        Ok(out)
+        Ok(self.fold_ledger(book, None)?.0)
     }
 
     /// The sum of the cash deltas in a book; zero when it has no entries.
     pub fn cash(&self, book: Book) -> Result<Decimal, StoreError> {
-        Ok(self
-            .ledger(book)?
-            .iter()
-            .fold(Decimal::ZERO, |acc, e| acc + e.cash_delta))
+        Ok(self.fold_ledger(book, None)?.1)
     }
 
     /// Net quantity per symbol using entries dated on or before `as_of`.
     pub fn positions_at(&self, book: Book, as_of: NaiveDate) -> Result<Positions, StoreError> {
-        let mut out = Positions::new();
-        for e in self.ledger(book)?.into_iter().filter(|e| e.date <= as_of) {
-            if let Some(s) = e.symbol {
-                *out.entry(s).or_insert(0) += e.qty;
-            }
-        }
-        out.retain(|_, q| *q != 0);
-        Ok(out)
+        Ok(self.fold_ledger(book, Some(as_of))?.0)
     }
 
     /// Cash using entries dated on or before `as_of`; zero when there are none.
     pub fn cash_at(&self, book: Book, as_of: NaiveDate) -> Result<Decimal, StoreError> {
-        Ok(self
-            .ledger(book)?
-            .iter()
-            .filter(|e| e.date <= as_of)
-            .fold(Decimal::ZERO, |acc, e| acc + e.cash_delta))
+        Ok(self.fold_ledger(book, Some(as_of))?.1)
+    }
+
+    /// The one fold over a book's ledger: positions (zero nets dropped) and
+    /// cash, over entries dated on or before `as_of`, or all of them for `None`.
+    fn fold_ledger(
+        &self,
+        book: Book,
+        as_of: Option<NaiveDate>,
+    ) -> Result<(Positions, Decimal), StoreError> {
+        let mut positions = Positions::new();
+        let mut cash = Decimal::ZERO;
+        for e in self.ledger(book)? {
+            if as_of.is_some_and(|d| e.date > d) {
+                continue;
+            }
+            cash += e.cash_delta;
+            if let Some(s) = e.symbol {
+                *positions.entry(s).or_insert(0) += e.qty;
+            }
+        }
+        positions.retain(|_, q| *q != 0);
+        Ok((positions, cash))
     }
 }
 
