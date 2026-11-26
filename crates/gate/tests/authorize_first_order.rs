@@ -14,6 +14,7 @@ fn approval(max_qty: u64) -> FirstOrderApproval {
     FirstOrderApproval {
         symbol: "SPY".to_string(),
         side: "buy".to_string(),
+        qty: max_qty,
         max_qty,
         valid_on: day(2),
     }

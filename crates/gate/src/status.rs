@@ -69,7 +69,7 @@ pub fn gate_status(owner: &OwnerFile, facts: &Facts) -> Vec<ChecklistItem> {
         item(
             "first_order_approval",
             owner.first_order.is_some(),
-            "Add a [first_order] table with symbol, side, max_qty and valid_on.",
+            "Add a [first_order] table with symbol, side, qty, max_qty and valid_on.",
         ),
         item(
             "stage_first_order",

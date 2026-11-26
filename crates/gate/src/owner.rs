@@ -23,6 +23,8 @@ pub enum Stage {
 pub struct FirstOrderApproval {
     pub symbol: String,
     pub side: String,
+    /// The quantity to send; between 1 and `max_qty`.
+    pub qty: u64,
     pub max_qty: u64,
     pub valid_on: NaiveDate,
 }
@@ -57,6 +59,7 @@ impl Default for OwnerFile {
 struct RawFirstOrder {
     symbol: String,
     side: String,
+    qty: u64,
     max_qty: u64,
     valid_on: toml::value::Datetime,
 }
@@ -115,12 +118,21 @@ pub fn load_owner_file(path: &Path, repo_root: &Path) -> Result<OwnerFile, GateE
         .map_err(|e| GateError::Parse(format!("cannot read owner file: {e}")))?;
     let raw: RawOwner = toml::from_str(&text).map_err(|e| GateError::Parse(e.to_string()))?;
     let first_order = match raw.first_order {
-        Some(f) => Some(FirstOrderApproval {
-            symbol: f.symbol,
-            side: f.side,
-            max_qty: f.max_qty,
-            valid_on: to_date(f.valid_on, "first_order.valid_on")?,
-        }),
+        Some(f) => {
+            if f.qty < 1 || f.qty > f.max_qty {
+                return Err(GateError::Parse(format!(
+                    "first_order.qty must be between 1 and max_qty ({}), got {}",
+                    f.max_qty, f.qty
+                )));
+            }
+            Some(FirstOrderApproval {
+                symbol: f.symbol,
+                side: f.side,
+                qty: f.qty,
+                max_qty: f.max_qty,
+                valid_on: to_date(f.valid_on, "first_order.valid_on")?,
+            })
+        }
         None => None,
     };
     let account_flat_confirmed_on = match raw.account_flat_confirmed_on {

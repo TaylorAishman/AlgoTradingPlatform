@@ -45,6 +45,7 @@ fn full_owner() -> OwnerFile {
         first_order: Some(FirstOrderApproval {
             symbol: "SPY".to_string(),
             side: "buy".to_string(),
+            qty: 1,
             max_qty: 1,
             valid_on: NaiveDate::from_ymd_opt(2026, 12, 2).unwrap(),
         }),
