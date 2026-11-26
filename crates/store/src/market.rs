@@ -70,6 +70,34 @@ impl Store {
         rows: &[BarRow],
         fetched_at: DateTime<Utc>,
     ) -> Result<UpsertStats, StoreError> {
+        let mut seen: std::collections::HashMap<(&str, chrono::NaiveDate, &str, &str), &BarRow> =
+            std::collections::HashMap::new();
+        for row in rows {
+            let b = &row.bar;
+            let key = (
+                b.symbol.as_str(),
+                b.date,
+                adjustment_text(row.adjustment),
+                row.feed.as_str(),
+            );
+            if let Some(first) = seen.insert(key, row) {
+                let f = &first.bar;
+                let same = f.open.value() == b.open.value()
+                    && f.high.value() == b.high.value()
+                    && f.low.value() == b.low.value()
+                    && f.close.value() == b.close.value()
+                    && f.volume == b.volume;
+                if !same {
+                    return Err(StoreError::Duplicate(format!(
+                        "two different bars for {} on {} ({}, {}) in one batch",
+                        b.symbol.as_str(),
+                        b.date.format("%Y-%m-%d"),
+                        adjustment_text(row.adjustment),
+                        row.feed
+                    )));
+                }
+            }
+        }
         let fetched = instant_text(fetched_at);
         let tx = self.conn.unchecked_transaction()?;
         let mut stats = UpsertStats::default();
