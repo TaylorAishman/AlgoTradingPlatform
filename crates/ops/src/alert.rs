@@ -54,6 +54,8 @@ impl Alerter {
     ) -> bool {
         let message = self.scrub(message);
         let message = message.as_str();
+        let code = self.scrub(code);
+        let code = code.as_str();
         eprintln!("{}", format_event(level.as_str(), message, run_id, at));
         let delivered = self.post(level, code, message, run_id, at);
         if let Err(e) = store.record_alert(level.as_str(), code, message, delivered, at) {
