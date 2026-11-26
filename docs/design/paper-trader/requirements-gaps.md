@@ -1,6 +1,6 @@
 # paper-trader: requirement gaps found during the build
 
-Reviewers and testers found these while building the waves. Waves 1 to 4 are in the first tables; waves 5 to 9 are in their own section at the end. Each is behaviour that `requirements.md` does not pin down, so the code does something reasonable but untested, or something that may not be what we want. Resolve them after the current `/devteam:auto` run by adding or amending requirements and re-planning the affected chains.
+Reviewers and testers found these while building the waves. Waves 1 to 4 are in the first tables; waves 5 to 9 and waves 10 to 15 are in their own sections at the end. Each is behaviour that `requirements.md` does not pin down, so the code does something reasonable but untested, or something that may not be what we want. Resolve them after the current `/devteam:auto` run by adding or amending requirements and re-planning the affected chains.
 
 Each entry gives the area, what is unspecified, what the code does today, and a suggested direction. "Decide" means a human choice is needed.
 
@@ -133,3 +133,46 @@ These came from reviewers, testers and implementers while building waves 5 to 9 
 - Duplicated code: the halt helper (`reconcile.rs` private `halt()` and `settle.rs` `halt_unexpected`); `crosscheck.rs` repeats setup from `runner.rs`; `cmd_backtest.rs` `family()` repeats strategy ids (`tsmom-v1`, `bh-volscaled-v1`); the cli `Env` and fixture helpers (about 150 lines) are copied into `validate_dsr.rs`, `validate_pbo.rs` and `validate_benchmark.rs`.
 - `check.sh` writes one shared `.devteam/state/last-check.log`; concurrent checks overwrite each other's log.
 - Process: O46 landed at 449 changed lines, over the 400-line step guideline, after review fixes (mostly test code). live-killswitch took five review rounds, two past the usual cap of three. One fix agent reported a per-commit proof that had not actually compiled (the missing `AlpacaError` import in O45).
+
+## Found in waves 10 to 15
+
+These came from the live-first-order, live-cycle-failures, cli-live, cli-ops and cli-e2e chains.
+
+### Decisions to confirm
+
+| # | Area | Question | Today |
+|---|------|----------|-------|
+| G-90 | live-rebalance (O37) | Do Deferred and SkippedLate outcomes submit nothing? | They skip submit, but the doc comment says otherwise |
+| G-91 | live-cycle-failures (O40) | Which errors become a Failed run with `run_failed` | Caught broadly; the test does not check that no order went out |
+| G-92 | live-first-order | The approval changes after the order was sent | A hard error; no retry after a broker reject; `max_qty` is used as the order quantity |
+| G-93 | gate (N12) | `Gate::first_order()` getter | Added by a replan; not in architecture section 5.3 |
+| G-94 | cli-ops (R24) | Owner sets all three sign-off minimums to 0 | An empty store with no calendar would give PASS; it gives NOT_READY today only because the defaults are above 0 |
+
+### Missing behaviour (add a requirement and a test)
+
+| # | Area | Gap | Today |
+|---|------|-----|-------|
+| G-95 | cli-live (R21), cli-ops (R23) | Fidelity section of `status.json` | Always empty; filling it needs the private `StoredTsmom` wrapper in `cmd_run.rs` moved somewhere shared |
+| G-96 | cli-live (R19, R21) | A store failure at the start or end of a run | `run_cycle` returns an error before the report is written; the plan says the report is written on every path except a held lock |
+| G-97 | cli-live (R20) | "A locked run writes nothing" | The store is opened (WAL, migrations) before the lock is taken; take the lock first |
+| G-98 | cli-ops (R25) | `--yes` checked first | `main.rs` loads keys and builds a client before `cancel-open` and `flatten` check `--yes`. Without keys the error is about keys, and below the stage minimum the exit is 4, not 1. No request is ever made. |
+| G-99 | shadow-fidelity (R24) | `fidelity()` on a store with no calendar | Errors with NotFound; `signoff report` special-cases it with an all-zero `Fidelity` |
+| G-100 | cli-ops (R25) | Kill-switch output | No test checks that no secret appears in the output, or the exit-4 path when the stage is too low |
+
+### Test-tightness follow-ups
+
+- cli-ops (R23): `status` "exits 0 right after a run" seeds a finished `ok` run row instead of running `trader run`. R27's e2e covers the real sequence.
+- cli-e2e (R27): the help-text check uses substring needles, so a flag spelled another way would pass.
+
+### Housekeeping (not requirements)
+
+- Duplicated code in `pt-cli`: `open_store`, a `Tsmom` placeholder for the strategy id and the webhook env lookup are copied from `cmd_run.rs` into `cmd_ops.rs`, because each step's Files allowed only `cmd_ops.rs`. The live fixture (`sessions`, `calendar_sessions`, `env()`) is copied into `run_ok.rs`, `run_exit_codes.rs`, `run_report.rs`, `killswitch.rs` and `e2e_paper.rs`; move it to `tests/common`.
+- Stale text: the `cmd_ops.rs` module doc still says "stubs"; `main.rs` says "the client is not used by the stub command modules yet"; the R25 doc comments say "before any client is built".
+- `pt-shadow` declares an unused `pt-stats` dependency (a cargo warning on every CHECK).
+- Shared `CARGO_TARGET_DIR` between worktrees left test binaries with another worktree's absolute path baked in, which failed CHECK until `cargo clean -p pt-cli`. Give each worktree, reviewer and integrator its own target dir.
+- Process:
+  - R19's implementer fixed the tester's mock calendar (a setup bug: no month end before the trade session); disclosed in the commit, no assertion changed.
+  - R26 and R27 were test-only: the commands already met R-393, R-399 and R-402.
+  - R27 landed at 448 lines, over the 400-line guideline (one test file with a shared fixture).
+  - cli-live took three review rounds.
+  - Some agent reports (V04, V10, R26) came back as the bare word "placeholder", so the orchestrator checked the work itself.
