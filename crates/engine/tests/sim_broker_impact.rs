@@ -62,7 +62,7 @@ fn sample_std(rets: &[f64]) -> f64 {
     (rets.iter().map(|r| (r - mean).powi(2)).sum::<f64>() / (n - 1.0)).sqrt()
 }
 
-// R-211
+// R-211, R-460
 #[test]
 fn impact_uses_sample_volatility_and_adv_from_the_view() {
     let cs = closes();
@@ -88,7 +88,7 @@ fn impact_uses_sample_volatility_and_adv_from_the_view() {
     assert_eq!(fills.len(), 1);
     let cost = fills[0].cost;
     assert!(cost.0 > dec(0));
-    let tolerance = rust_decimal::Decimal::new(1, 4);
+    let tolerance = rust_decimal::Decimal::new(1, 9);
     assert!(
         (cost.0 - expected.0).abs() <= tolerance,
         "cost {cost:?} differs from expected {expected:?}"
