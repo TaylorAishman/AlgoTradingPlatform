@@ -3,7 +3,7 @@
 //! The stage gate is checked first, so a run in the backtest stage is refused
 //! before any request goes to the broker.
 
-use pt_alpaca::reference::clock;
+use pt_alpaca::reference::{clock, WireClock};
 use pt_config::hash::config_hash;
 use pt_data::ingest::ingest;
 use pt_data::reference::{sync_assets, sync_calendar};
@@ -12,6 +12,7 @@ use pt_gate::owner::Stage;
 
 use crate::context::LiveContext;
 use crate::error::LiveError;
+use crate::rebalance::rebalance;
 use crate::snapshot::{expected_last_session, trade_session};
 
 /// How a run ended.
@@ -48,7 +49,16 @@ pub fn run_cycle(ctx: &LiveContext) -> Result<RunOutcome, LiveError> {
 
     let mut phases: Vec<String> = Vec::new();
     let status = RunStatus::Ok;
-    read_only_phases(ctx, &mut phases)?;
+    let wire_clock = read_only_phases(ctx, &mut phases)?;
+
+    // Only the dry-run stage records a decision without sending it; the stages
+    // that submit orders add their own phase.
+    let dry_run_only = ctx.gate.allows(Capability::RecordDryRun).is_ok()
+        && ctx.gate.allows(Capability::SubmitOrder).is_err();
+    if dry_run_only {
+        rebalance(ctx, &wire_clock)?;
+        phases.push("rebalance".to_string());
+    }
 
     ctx.store.finish_run(
         run_id,
@@ -65,7 +75,7 @@ pub fn run_cycle(ctx: &LiveContext) -> Result<RunOutcome, LiveError> {
 
 /// The phases that only read: the calendar, bars through the last session that
 /// must be complete, and the asset flags. Each is pushed once it has finished.
-fn read_only_phases(ctx: &LiveContext, phases: &mut Vec<String>) -> Result<(), LiveError> {
+fn read_only_phases(ctx: &LiveContext, phases: &mut Vec<String>) -> Result<WireClock, LiveError> {
     let wire_clock = clock(ctx.http)?;
 
     sync_calendar(
@@ -84,7 +94,7 @@ fn read_only_phases(ctx: &LiveContext, phases: &mut Vec<String>) -> Result<(), L
 
     sync_assets(ctx.store, ctx.http, ctx.cfg, ctx.clock.now_utc())?;
     phases.push("assets".to_string());
-    Ok(())
+    Ok(wire_clock)
 }
 
 fn stage_name(stage: Stage) -> &'static str {
