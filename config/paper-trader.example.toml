@@ -6,6 +6,9 @@ id = "tsmom-v1"
 [data]
 feed = "sip"
 
+[backtest]
+initial_capital = 100000
+
 [[universe]]
 symbol = "SPY"
 asset_class = "equity"
