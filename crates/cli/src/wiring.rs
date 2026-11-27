@@ -16,17 +16,19 @@ use pt_gate::error::GateError;
 use pt_gate::owner::{load_owner_file, OwnerFile, Stage};
 use pt_store::db::Store;
 
-use clap::Parser;
+use std::sync::OnceLock;
 
-use crate::cli::Cli;
+static CONFIG_FLAG: OnceLock<Option<PathBuf>> = OnceLock::new();
+
+/// Record the `--config` flag from the one command-line parse, made in `main`.
+pub fn set_config_flag(path: Option<PathBuf>) {
+    let _ = CONFIG_FLAG.set(path);
+}
 
 /// The config path: `--config` first, then `PT_CONFIG`.
-///
-/// The dispatcher hands commands only their own action, so the global flag is
-/// read again from the process arguments (already validated by the first parse).
 pub fn config_path() -> anyhow::Result<PathBuf> {
-    if let Some(path) = Cli::parse().config {
-        return Ok(path);
+    if let Some(Some(path)) = CONFIG_FLAG.get() {
+        return Ok(path.clone());
     }
     match std::env::var_os("PT_CONFIG") {
         Some(path) if !path.is_empty() => Ok(PathBuf::from(path)),

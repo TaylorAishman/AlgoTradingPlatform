@@ -84,3 +84,41 @@ fn no_config_path_and_no_pt_config_exits_one_naming_pt_config() {
         stderr(&out)
     );
 }
+
+fn cli_sources() -> Vec<(String, String)> {
+    let src = std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join("src");
+    std::fs::read_dir(src)
+        .unwrap()
+        .map(|e| e.unwrap().path())
+        .filter(|p| p.extension().is_some_and(|x| x == "rs"))
+        .map(|p| {
+            (
+                p.display().to_string(),
+                std::fs::read_to_string(&p).unwrap(),
+            )
+        })
+        .collect()
+}
+
+#[test]
+fn no_source_file_reads_env_args() {
+    // R-407
+    for (path, text) in cli_sources() {
+        assert!(!text.contains("env::args"), "{path} contains env::args");
+    }
+}
+
+#[test]
+fn the_command_line_is_parsed_in_exactly_one_place() {
+    // R-407: the config path is resolved once, by the argument parser.
+    let calls: Vec<String> = cli_sources()
+        .into_iter()
+        .filter(|(_, t)| t.contains("Cli::parse("))
+        .map(|(p, _)| p)
+        .collect();
+    let total: usize = cli_sources()
+        .iter()
+        .map(|(_, t)| t.matches("Cli::parse(").count())
+        .sum();
+    assert_eq!(total, 1, "Cli::parse( appears in {calls:?}");
+}

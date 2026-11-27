@@ -74,6 +74,7 @@ fn dispatch(cli: &Cli) -> anyhow::Result<i32> {
 
 fn main() -> ExitCode {
     let cli = Cli::parse();
+    wiring::set_config_flag(cli.config.clone());
     match dispatch(&cli) {
         Ok(code) => ExitCode::from(u8::try_from(code).unwrap_or(1)),
         Err(err) => {
