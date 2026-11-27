@@ -1,33 +1,23 @@
 //! Cross-check: the engine and the vectorised calculator run the same weight schedule
 //! and their equity series are compared session by session.
 
-use std::collections::{BTreeMap, BTreeSet};
-use std::sync::Arc;
+use std::collections::BTreeMap;
 
 use pt_calendar::calendar::TradingCalendar;
 use pt_calendar::schedule::monthly_schedule;
 use pt_config::config::Config;
 use pt_core::cost::CostSpec;
-use pt_core::types::{PriceBasis, Symbol};
+use pt_core::types::Symbol;
 use pt_core::view::MarketView;
-use pt_data::view::StoreView;
-use pt_engine::decision::params_from_config;
 use pt_engine::error::EngineError;
 use pt_engine::schedule::weights_schedule;
 use pt_engine::simulate::{simulate, SimConfig};
 use pt_store::db::Store;
-use pt_strategy::benchmark::LongOnly;
-use pt_strategy::strategy::Strategy;
-use pt_strategy::tsmom::{Tsmom, TsmomParams};
 use pt_vector::vector::{compare, vector_equity, CrossCheck, VectorInputs};
 use rust_decimal::Decimal;
 
 use crate::error::ValidateError;
-use crate::runner::BacktestRequest;
-
-fn symbol(s: &str) -> Result<Symbol, ValidateError> {
-    Symbol::new(s).map_err(|e| ValidateError::Invalid(format!("symbol {s:?}: {e}")))
-}
+use crate::runner::{BacktestRequest, Setup};
 
 /// The cost profile both calculators run with: all zero, or the research profile
 /// without the impact term, which the vector calculator does not implement.
@@ -53,43 +43,15 @@ pub fn crosscheck(
     zero_cost: bool,
     tolerance: Decimal,
 ) -> Result<CrossCheck, ValidateError> {
-    let cal = Arc::new(store.calendar()?);
-    let universe = cfg
-        .universe
-        .iter()
-        .map(|i| symbol(&i.symbol))
-        .collect::<Result<Vec<_>, _>>()?;
-    let shortable: BTreeSet<Symbol> = cfg
-        .universe
-        .iter()
-        .zip(&universe)
-        .filter(|(i, _)| i.shortable)
-        .map(|(_, s)| s.clone())
-        .collect();
-    let risk_free = symbol(&cfg.strategy.risk_free_symbol)?;
-
-    let strategy: Box<dyn Strategy> = match req.strategy.as_str() {
-        "tsmom" => Box::new(Tsmom::new(
-            TsmomParams {
-                lookback_months: cfg.strategy.lookback_months.clone(),
-                risk_free_symbol: risk_free.clone(),
-            },
-            Arc::clone(&cal),
-        )),
-        "benchmark" => Box::new(LongOnly::new(Arc::clone(&cal))),
-        other => {
-            return Err(ValidateError::Invalid(format!(
-                "unknown strategy {other:?}"
-            )))
-        }
-    };
-
-    let mut symbols = universe.clone();
-    if !symbols.contains(&risk_free) {
-        symbols.push(risk_free);
-    }
-    let view = StoreView::load(store, &symbols, &cfg.data.feed, PriceBasis::Adjusted, None)?;
-    let params = params_from_config(cfg);
+    let Setup {
+        cal,
+        universe,
+        shortable,
+        strategy,
+        view,
+        params,
+        ..
+    } = Setup::build(store, cfg, req)?;
     let cost = cost_spec(cfg, zero_cost);
     let sim = SimConfig {
         start: req.from,
