@@ -40,6 +40,9 @@ pub enum BacktestCmd {
         to: String,
         #[arg(long)]
         with_costs: bool,
+        /// Starting capital (default from the config; the account is never read)
+        #[arg(long)]
+        capital: Option<Decimal>,
     },
 }
 
@@ -55,7 +58,8 @@ pub fn backtest(action: &BacktestCmd) -> anyhow::Result<i32> {
             from,
             to,
             with_costs,
-        } => crosscheck(from, to, *with_costs),
+            capital,
+        } => crosscheck(from, to, *with_costs, *capital),
     }
 }
 
@@ -149,16 +153,30 @@ fn run(
 
 /// Run the engine and vector calculators on the same schedule and compare equity.
 /// Exits 1 when they differ or the run cannot be compared.
-fn crosscheck(from: &str, to: &str, with_costs: bool) -> anyhow::Result<i32> {
+fn crosscheck(
+    from: &str,
+    to: &str,
+    with_costs: bool,
+    capital: Option<Decimal>,
+) -> anyhow::Result<i32> {
     let cfg = wiring::load_config()?;
+    let initial_capital = match capital {
+        Some(c) if c <= Decimal::ZERO => {
+            eprintln!("--capital must be greater than zero");
+            return Ok(1);
+        }
+        Some(c) => c,
+        None => cfg.backtest.initial_capital,
+    };
     let req = BacktestRequest {
         strategy: "tsmom".to_string(),
         from: date("--from", from)?,
         to: date("--to", to)?,
-        initial_capital: cfg.backtest.initial_capital,
+        initial_capital,
     };
     let path = Path::new(&cfg.run.db_path);
     let store = Store::open(path).with_context(|| format!("opening store {}", path.display()))?;
+    println!("capital {}", initial_capital.normalize());
     match run_crosscheck(&store, &cfg, &req, !with_costs, Decimal::ZERO) {
         Ok(c) => {
             println!("max_abs_diff {}", c.max_abs_diff.normalize());
