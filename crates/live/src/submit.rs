@@ -85,7 +85,7 @@ pub fn submit_planned(ctx: &LiveContext, auth: &AuthContext) -> Result<SubmitRep
         }
         let wire = match submit_order(ctx.http, permit, &order) {
             Ok(wire) => wire,
-            Err(AlpacaError::Rejected { status, message }) => {
+            Err(AlpacaError::Rejected { status, message }) if matches!(status, 403 | 422) => {
                 // The broker refused this order: record it and carry on (R-286).
                 let now = ctx.clock.now_utc();
                 ctx.store.set_order_state(
