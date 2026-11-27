@@ -4,6 +4,7 @@ mod cli;
 mod cmd_backtest;
 mod cmd_config;
 mod cmd_data;
+mod cmd_kill;
 mod cmd_ops;
 mod cmd_run;
 mod cmd_validate;
@@ -64,8 +65,8 @@ fn dispatch(cli: &Cli) -> anyhow::Result<i32> {
         Command::Validate { action } => cmd_validate::validate(action),
         Command::Run => cmd_run::run(),
         Command::Halt { action } => cmd_ops::halt(action),
-        Command::CancelOpen(args) => cmd_ops::cancel_open(args),
-        Command::Flatten(args) => cmd_ops::flatten(args),
+        Command::CancelOpen(args) => cmd_kill::cancel_open(args),
+        Command::Flatten(args) => cmd_kill::flatten(args),
         Command::Report => cmd_ops::report(),
         Command::Status { max_age_hours } => cmd_ops::status(*max_age_hours),
         Command::Signoff { action } => cmd_ops::signoff(action),
