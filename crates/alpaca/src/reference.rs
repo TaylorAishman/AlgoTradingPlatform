@@ -4,6 +4,7 @@ use chrono::{DateTime, FixedOffset, NaiveDate};
 
 use crate::error::AlpacaError;
 use crate::http::HttpClient;
+use crate::orders_read::percent_encode;
 
 /// The market clock as Alpaca reports it; instants keep their offsets.
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -81,7 +82,7 @@ pub struct WireAsset {
 /// Borrow status is read from the boolean `easy_to_borrow` field when present,
 /// otherwise from `borrow_status == "easy_to_borrow"`; absent both, false.
 pub fn asset(http: &HttpClient, symbol: &str) -> Result<Option<WireAsset>, AlpacaError> {
-    let body = match http.get_trading(&format!("/v2/assets/{symbol}")) {
+    let body = match http.get_trading(&format!("/v2/assets/{}", percent_encode(symbol))) {
         Ok(b) => b,
         Err(AlpacaError::Rejected { status: 404, .. }) => return Ok(None),
         Err(e) => return Err(e),

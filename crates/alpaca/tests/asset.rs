@@ -92,3 +92,29 @@ fn unknown_asset_is_none() {
     assert_eq!(seen[0].path(), "/v2/assets/NOPE");
     assert!(a.is_none());
 }
+
+// R-435: a slash in the symbol is percent-encoded in the request path.
+#[test]
+fn symbol_with_slash_is_percent_encoded_in_path() {
+    let body = r#"{"symbol":"BRK/B","tradable":true,"shortable":true}"#;
+    let l = Listener::serve(vec![(200, body.to_string())]);
+    let fake = Fake::new();
+    let http = client(&l.url, &fake);
+    asset(&http, "BRK/B").expect("asset").expect("some");
+    let seen = l.finish();
+    assert_eq!(seen.len(), 1);
+    assert_eq!(seen[0].method, "GET");
+    assert_eq!(seen[0].path(), "/v2/assets/BRK%2FB");
+}
+
+// R-435: characters that would end or alter the path are encoded too.
+#[test]
+fn symbol_with_query_and_space_characters_is_encoded() {
+    let l = Listener::serve(vec![(404, r#"{"message":"asset not found"}"#.to_string())]);
+    let fake = Fake::new();
+    let http = client(&l.url, &fake);
+    asset(&http, "A B?c").expect("404 is not an error");
+    let seen = l.finish();
+    assert_eq!(seen[0].path(), "/v2/assets/A%20B%3Fc");
+    assert_eq!(seen[0].query(), "");
+}
