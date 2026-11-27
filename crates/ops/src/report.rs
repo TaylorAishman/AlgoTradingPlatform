@@ -148,10 +148,10 @@ fn status_json(inp: &ReportInputs) -> Result<Value, OpsError> {
         .and_then(|s| crate::pnl::pnl(&snaps, s.date))
         .map(|p| {
             json!({
-                "day": p.day.to_string(),
-                "mtd": p.mtd.to_string(),
-                "ytd": p.ytd.to_string(),
-                "inception": p.inception.to_string(),
+                "day": p.day.map(|v| v.to_string()),
+                "mtd": p.mtd.map(|v| v.to_string()),
+                "ytd": p.ytd.map(|v| v.to_string()),
+                "inception": p.inception.map(|v| v.to_string()),
             })
         });
     let halts: Vec<Value> = inp

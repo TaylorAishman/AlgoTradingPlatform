@@ -12,7 +12,8 @@ pub trait HistoryView {
 pub trait MarketView: HistoryView {
     /// The bar on the execution basis for `date`, if any.
     fn exec_bar(&self, symbol: &Symbol, date: NaiveDate) -> Option<Bar>;
-    /// Mean volume in shares over the `sessions` sessions before `asof`.
+    /// Mean volume in shares over the last `sessions` sessions on or before `asof`;
+    /// `None` when fewer than `sessions` sessions are available.
     fn adv_shares(&self, symbol: &Symbol, asof: NaiveDate, sessions: usize) -> Option<f64>;
 }
 

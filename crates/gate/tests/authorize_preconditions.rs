@@ -18,6 +18,7 @@ fn gate(stage: Stage, flat: Option<NaiveDate>) -> Gate {
         first_order: Some(FirstOrderApproval {
             symbol: "SPY".to_string(),
             side: "buy".to_string(),
+            qty: 1,
             max_qty: 1,
             valid_on: day(2),
         }),

@@ -15,5 +15,6 @@ stage = "backtest"
 # [first_order]
 # symbol = "SPY"
 # side = "buy"
+# qty = 1
 # max_qty = 1
 # valid_on = 2026-12-02

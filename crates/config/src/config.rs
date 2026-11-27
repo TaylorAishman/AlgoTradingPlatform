@@ -259,6 +259,21 @@ impl Default for SignoffCfg {
     }
 }
 
+/// Settings for historical backtests. Not part of the configuration hash.
+#[derive(Debug, Clone, PartialEq, Eq, Deserialize)]
+#[serde(default, deny_unknown_fields)]
+pub struct BacktestCfg {
+    pub initial_capital: Decimal,
+}
+
+impl Default for BacktestCfg {
+    fn default() -> Self {
+        Self {
+            initial_capital: Decimal::new(100_000, 0),
+        }
+    }
+}
+
 /// The whole configuration.
 #[derive(Debug, Clone, PartialEq, Eq, Deserialize)]
 #[serde(deny_unknown_fields)]
@@ -279,6 +294,8 @@ pub struct Config {
     pub cost: CostCfg,
     #[serde(default)]
     pub signoff: SignoffCfg,
+    #[serde(default)]
+    pub backtest: BacktestCfg,
     #[serde(default)]
     pub universe: Vec<Instrument>,
 }
@@ -322,6 +339,17 @@ fn validate(cfg: &Config) -> Result<(), ConfigError> {
             "strategy.vol_min_obs ({}) must not exceed strategy.vol_max_obs ({})",
             cfg.strategy.vol_min_obs, cfg.strategy.vol_max_obs
         )));
+    }
+    for (key, value) in [
+        ("min_sessions", cfg.signoff.min_sessions),
+        ("min_rebalances", cfg.signoff.min_rebalances),
+        ("min_fills", cfg.signoff.min_fills),
+    ] {
+        if value < 1 {
+            return Err(ConfigError::Invalid(format!(
+                "signoff.{key} must be at least 1, got {value}"
+            )));
+        }
     }
     if cfg.stats.pbo_partitions < 2 || !cfg.stats.pbo_partitions.is_multiple_of(2) {
         return Err(ConfigError::Invalid(format!(
@@ -398,6 +426,12 @@ fn validate(cfg: &Config) -> Result<(), ConfigError> {
                 "cost.shadow.impact_coeff must be 0 when data.feed is \"iex\"".into(),
             ));
         }
+    }
+    if cfg.backtest.initial_capital <= Decimal::ZERO {
+        return Err(ConfigError::Invalid(format!(
+            "backtest.initial_capital must be positive, got {}",
+            cfg.backtest.initial_capital
+        )));
     }
     if cfg.universe.is_empty() {
         return Err(ConfigError::Invalid("universe must not be empty".into()));

@@ -47,6 +47,7 @@ fn example_file_shows_every_key_as_a_comment() {
         "alert_webhook_url",
         "symbol",
         "side",
+        "qty",
         "max_qty",
         "valid_on",
     ] {
@@ -73,6 +74,7 @@ fn example_file_with_every_example_uncommented_loads_with_the_shown_values() {
                     "alert_webhook_url",
                     "symbol",
                     "side",
+                    "qty",
                     "max_qty",
                     "valid_on",
                 ]
@@ -115,6 +117,7 @@ fn example_file_with_every_example_uncommented_loads_with_the_shown_values() {
     let fo = owner.first_order.expect("first_order example");
     assert_eq!(fo.symbol, "SPY");
     assert_eq!(fo.side, "buy");
+    assert_eq!(fo.qty, 1);
     assert_eq!(fo.max_qty, 1);
     assert_eq!(fo.valid_on, NaiveDate::from_ymd_opt(2026, 12, 2).unwrap());
 }

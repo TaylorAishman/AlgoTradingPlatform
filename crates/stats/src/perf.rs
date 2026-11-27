@@ -27,6 +27,9 @@ pub fn max_drawdown(equity: &[f64]) -> f64 {
     let mut peak = f64::NEG_INFINITY;
     let mut worst = 0.0_f64;
     for &e in equity {
+        if e.is_nan() {
+            return f64::NAN;
+        }
         peak = peak.max(e);
         if peak > 0.0 {
             worst = worst.max((peak - e) / peak);
@@ -37,11 +40,14 @@ pub fn max_drawdown(equity: &[f64]) -> f64 {
 
 /// Compound annual growth rate of an equity curve sampled `periods_per_year` times a year.
 ///
-/// Returns `0.0` when there are fewer than two points or the start or end value is not positive.
+/// Returns NaN when any value is NaN, and `0.0` when there are fewer than two points or the start or end value is not positive.
 pub fn cagr(equity: &[f64], periods_per_year: f64) -> f64 {
     let (Some(&first), Some(&last)) = (equity.first(), equity.last()) else {
         return 0.0;
     };
+    if equity.iter().any(|e| e.is_nan()) {
+        return f64::NAN;
+    }
     if equity.len() < 2 || first <= 0.0 || last <= 0.0 {
         return 0.0;
     }

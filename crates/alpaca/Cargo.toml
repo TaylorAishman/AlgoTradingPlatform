@@ -20,5 +20,4 @@ thiserror.workspace = true
 ureq.workspace = true
 
 [dev-dependencies]
-pt-mock-alpaca.workspace = true
 tiny_http.workspace = true

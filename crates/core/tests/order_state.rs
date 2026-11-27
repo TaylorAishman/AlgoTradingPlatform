@@ -13,7 +13,7 @@ const ALL: [OrderState; 9] = [
     Abandoned,
 ];
 
-const ALLOWED: [(OrderState, OrderState); 12] = [
+const ALLOWED: [(OrderState, OrderState); 13] = [
     (Intent, Submitted),
     (Intent, Rejected),
     (Intent, Abandoned),
@@ -26,6 +26,7 @@ const ALLOWED: [(OrderState, OrderState); 12] = [
     (PartiallyFilled, Filled),
     (PartiallyFilled, Canceled),
     (PartiallyFilled, Expired),
+    (Rejected, Submitted),
 ];
 
 // R-017: every listed pair is allowed.
@@ -49,13 +50,27 @@ fn every_other_pair_is_rejected() {
             }
         }
     }
-    assert_eq!(allowed_count, 12);
+    assert_eq!(allowed_count, 13);
 }
 
-// R-017: terminal states and DryRun have no outgoing transitions.
+// R-017: a rejected order may be resubmitted.
+#[test]
+fn rejected_may_move_to_submitted() {
+    assert!(transition_allowed(Rejected, Submitted));
+}
+
+// R-017: from Rejected, only Submitted is reachable.
+#[test]
+fn rejected_reaches_nothing_but_submitted() {
+    for to in ALL {
+        assert_eq!(transition_allowed(Rejected, to), to == Submitted, "{to:?}");
+    }
+}
+
+// R-017: DryRun and the other terminal states have no outgoing transitions.
 #[test]
 fn terminal_and_dry_run_states_have_no_exits() {
-    for from in [DryRun, Filled, Canceled, Expired, Rejected, Abandoned] {
+    for from in [DryRun, Filled, Canceled, Expired, Abandoned] {
         for to in ALL {
             assert!(!transition_allowed(from, to), "{from:?} -> {to:?}");
         }

@@ -23,4 +23,20 @@ pub enum AlpacaError {
     Parse(String),
     #[error("transport error: {0}")]
     Transport(String),
+    #[error("invalid argument: {0}")]
+    Invalid(String),
+}
+
+impl AlpacaError {
+    /// True when the broker refused an order itself (HTTP 403 or 422), as
+    /// opposed to a transport, server or request-shape problem.
+    pub fn is_order_reject(&self) -> bool {
+        matches!(
+            self,
+            AlpacaError::Rejected {
+                status: 403 | 422,
+                ..
+            }
+        )
+    }
 }

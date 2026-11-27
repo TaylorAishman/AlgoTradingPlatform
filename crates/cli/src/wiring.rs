@@ -150,7 +150,7 @@ pub fn build_client() -> anyhow::Result<HttpClient> {
         REQUESTS_PER_MINUTE,
         Arc::new(SystemClock::new()),
         sleeper.clone(),
-    );
+    )?;
     Ok(HttpClient::new(endpoints, creds, limiter, sleeper))
 }
 

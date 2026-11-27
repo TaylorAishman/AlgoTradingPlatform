@@ -14,7 +14,6 @@ workspace = true
 chrono.workspace = true
 csv.workspace = true
 pt-alpaca.workspace = true
-pt-calendar.workspace = true
 pt-config.workspace = true
 pt-core.workspace = true
 pt-store.workspace = true
@@ -23,4 +22,3 @@ thiserror.workspace = true
 
 [dev-dependencies]
 pt-mock-alpaca.workspace = true
-tempfile.workspace = true

@@ -1,6 +1,7 @@
 use std::sync::{Arc, Mutex};
 use std::time::Duration;
 
+use pt_alpaca::error::AlpacaError;
 use pt_alpaca::limiter::{MonoClock, RateLimiter, Sleeper};
 
 /// A fake clock whose sleeper advances the clock and records each sleep.
@@ -36,7 +37,10 @@ fn limiter(max: u32) -> (RateLimiter, Arc<Fake>) {
     let fake = Arc::new(Fake::default());
     let clock: Arc<dyn MonoClock> = fake.clone();
     let sleeper: Arc<dyn Sleeper> = fake.clone();
-    (RateLimiter::new(max, clock, sleeper), fake)
+    (
+        RateLimiter::new(max, clock, sleeper).expect("a limit above zero is accepted"),
+        fake,
+    )
 }
 
 // R-084: three acquires at time 0 with a limit of 3 cause no sleep.
@@ -83,4 +87,38 @@ fn sleep_is_the_time_until_the_oldest_call_expires() {
     fake.advance(Duration::from_secs(10));
     lim.acquire();
     assert_eq!(fake.sleeps(), vec![Duration::from_secs(50)]);
+}
+
+fn build(max: u32) -> Result<RateLimiter, AlpacaError> {
+    let fake = Arc::new(Fake::default());
+    let clock: Arc<dyn MonoClock> = fake.clone();
+    let sleeper: Arc<dyn Sleeper> = fake;
+    RateLimiter::new(max, clock, sleeper)
+}
+
+// R-432: a limit of 0 is refused with AlpacaError::Invalid, not turned into 1.
+#[test]
+fn a_limit_of_zero_is_refused_as_invalid() {
+    match build(0) {
+        Err(AlpacaError::Invalid(_)) => {}
+        Err(other) => panic!("expected Invalid, got {other:?}"),
+        Ok(_) => panic!("a limit of 0 must be refused"),
+    }
+}
+
+// R-432: limits of 1 and 200 are accepted.
+#[test]
+fn limits_of_one_and_two_hundred_are_accepted() {
+    assert!(build(1).is_ok());
+    assert!(build(200).is_ok());
+}
+
+// R-432: a limit of 1 really allows one call, and the second sleeps.
+#[test]
+fn a_limit_of_one_allows_exactly_one_call_per_window() {
+    let (lim, fake) = limiter(1);
+    lim.acquire();
+    assert!(fake.sleeps().is_empty());
+    lim.acquire();
+    assert_eq!(fake.sleeps(), vec![Duration::from_secs(60)]);
 }
