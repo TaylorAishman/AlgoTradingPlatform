@@ -5,7 +5,7 @@ use pt_gate::gate::{OrderPermit, OrderSummary};
 
 use crate::error::AlpacaError;
 use crate::http::HttpClient;
-use crate::orders_read::{parse_order, WireOrder};
+use crate::orders_read::{parse_order, percent_encode, WireOrder};
 
 /// A market day order to send.
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -55,6 +55,6 @@ pub fn submit_order(
 /// body is ignored. No permit is taken: whether a cancel is allowed is the
 /// caller's check, `Gate::allows(Capability::CancelOrder)`.
 pub fn cancel_order(http: &HttpClient, broker_order_id: &str) -> Result<(), AlpacaError> {
-    http.delete_trading(&format!("/v2/orders/{broker_order_id}"))?;
+    http.delete_trading(&format!("/v2/orders/{}", percent_encode(broker_order_id)))?;
     Ok(())
 }

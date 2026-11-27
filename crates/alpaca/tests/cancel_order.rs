@@ -137,3 +137,39 @@ fn cancel_retries_a_429_after_fifteen_seconds() {
     assert_eq!(fake.sleeps(), secs(&[15]));
     assert_eq!(l.finish().len(), 2);
 }
+
+// R-436: an order id with a slash and a space is percent-encoded in the path.
+#[test]
+fn cancel_percent_encodes_the_order_id() {
+    let l = Listener::serve(vec![(204, String::new())]);
+    let fake = Fake::new();
+    let http = client(&l.url, &fake);
+    assert_eq!(cancel_order(&http, "a/b c"), Ok(()));
+    let seen = l.finish();
+    assert_eq!(seen.len(), 1);
+    assert_eq!(seen[0].method, "DELETE");
+    assert_eq!(seen[0].path(), "/v2/orders/a%2Fb%20c");
+}
+
+// R-436: characters that would start a query or fragment are encoded too.
+#[test]
+fn cancel_encodes_query_and_fragment_characters() {
+    let l = Listener::serve(vec![(204, String::new())]);
+    let fake = Fake::new();
+    let http = client(&l.url, &fake);
+    assert_eq!(cancel_order(&http, "x?y#z"), Ok(()));
+    let seen = l.finish();
+    assert_eq!(seen[0].path(), "/v2/orders/x%3Fy%23z");
+}
+
+// R-436: an id of hexadecimal digits and hyphens is sent unchanged.
+#[test]
+fn cancel_sends_a_uuid_unchanged() {
+    let l = Listener::serve(vec![(204, String::new())]);
+    let fake = Fake::new();
+    let http = client(&l.url, &fake);
+    let id = "61e69015-8549-4bfd-b9c3-01e75843f47d";
+    assert_eq!(cancel_order(&http, id), Ok(()));
+    let seen = l.finish();
+    assert_eq!(seen[0].path(), format!("/v2/orders/{id}"));
+}
