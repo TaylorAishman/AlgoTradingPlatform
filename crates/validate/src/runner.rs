@@ -53,14 +53,18 @@ fn dec(out: &mut String, key: &str, value: Decimal) {
 
 /// The lowercase hex SHA-256 of everything that changes a backtest result: the request,
 /// the strategy parameters, the universe, the research costs, sizing, risk, and the data
-/// feed. Paths and signoff thresholds are left out because they do not change the result.
+/// feed. Paths, signoff thresholds and the starting capital are left out: none of them
+/// changes which trial this is.
 pub fn trial_hash(cfg: &Config, req: &BacktestRequest, params: &str) -> String {
     let mut o = String::new();
     text(&mut o, "strategy", &req.strategy);
     text(&mut o, "params", params);
     line(&mut o, "from", req.from);
     line(&mut o, "to", req.to);
-    dec(&mut o, "initial_capital", req.initial_capital);
+
+    // The starting capital is not hashed (R-367). This fixed line is what the hash held
+    // at the original capital, so trial hashes registered before the change stay valid.
+    line(&mut o, "initial_capital", 100000);
 
     text(&mut o, "data.feed", &cfg.data.feed);
 
@@ -220,12 +224,42 @@ fn symbol(s: &str) -> Result<Symbol, ValidateError> {
     Symbol::new(s).map_err(|e| ValidateError::Invalid(format!("symbol {s:?}: {e}")))
 }
 
+/// Where a run's starting capital came from.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum CapitalSource {
+    Flag,
+    Account,
+    Config,
+}
+
+impl CapitalSource {
+    /// The name stored with the run.
+    pub fn as_str(self) -> &'static str {
+        match self {
+            CapitalSource::Flag => "flag",
+            CapitalSource::Account => "account",
+            CapitalSource::Config => "config",
+        }
+    }
+}
+
 /// Run `req` on adjusted prices with the research cost profile, store its equity and
-/// register it as a trial.
+/// register it as a trial. The capital is recorded with source `config`.
 pub fn run_and_record(
     store: &Store,
     cfg: &Config,
     req: &BacktestRequest,
+    clock: &dyn Clock,
+) -> Result<BacktestOutcome, ValidateError> {
+    run_and_record_with(store, cfg, req, CapitalSource::Config, clock)
+}
+
+/// Like `run_and_record`, and stores the starting capital with the stated `source`.
+pub fn run_and_record_with(
+    store: &Store,
+    cfg: &Config,
+    req: &BacktestRequest,
+    source: CapitalSource,
     clock: &dyn Clock,
 ) -> Result<BacktestOutcome, ValidateError> {
     let cal = Arc::new(store.calendar()?);
@@ -291,10 +325,12 @@ pub fn run_and_record(
     let n_obs = u32::try_from(excess.len())
         .map_err(|_| ValidateError::Invalid("too many observations".into()))?;
     let hash = trial_hash(cfg, req, &strategy.params_canonical());
-    let run_id = store.save_backtest(
+    let run_id = store.save_backtest_with_capital(
         strategy.id(),
         &hash,
         &config_hash(cfg),
+        req.initial_capital,
+        source.as_str(),
         &result.equity,
         clock.now_utc(),
     )?;
