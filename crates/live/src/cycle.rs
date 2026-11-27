@@ -199,18 +199,34 @@ fn first_order_phases(
         first_order_already_sent: already_sent,
     };
     let mut report = submit_planned(ctx, &auth)?;
+    let mut retried_all = true;
     // A rejected first order is tried again under a new id, after a wait.
     for (i, wait) in RETRY_WAITS_SECS.iter().enumerate() {
         if report.rejected == 0 {
+            retried_all = false;
             break;
         }
         ctx.http.sleep(std::time::Duration::from_secs(*wait));
         if !plan_first_order_retry(ctx, wire_clock, i as u32 + 1)? {
+            retried_all = false;
             break;
         }
         report = submit_planned(ctx, &auth)?;
     }
     phases.push("submit".to_string());
+    // R-497: every retry used and the last one rejected. Fail the run with one
+    // critical alert; no halt is set, and the dead approval is not tried again.
+    if retried_all && report.rejected > 0 {
+        ctx.alerter.alert(
+            ctx.store,
+            Level::Critical,
+            "first_order_exhausted",
+            "the first order was rejected on every attempt; no more retries",
+            None,
+            ctx.clock.now_utc(),
+        );
+        return Ok(RunStatus::Failed);
+    }
     Ok(RunStatus::Ok)
 }
 
