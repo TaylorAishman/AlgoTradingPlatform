@@ -12,6 +12,7 @@ workspace = true
 
 [dependencies]
 chrono.workspace = true
+chrono-tz.workspace = true
 pt-alpaca.workspace = true
 pt-calendar.workspace = true
 pt-config.workspace = true
