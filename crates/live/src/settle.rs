@@ -4,18 +4,18 @@
 //! Fills come from the FILL activities, keyed by activity id (D-19), so
 //! reading the same activity again records nothing more.
 
-use std::collections::{HashMap, HashSet};
+use std::collections::HashMap;
 
 use chrono::{NaiveTime, TimeZone, Utc};
 use pt_alpaca::activities::{fill_activities, WireFill};
 use pt_alpaca::orders_read::order_by_client_id;
 use pt_core::order_state::OrderState;
-use pt_ops::alert::Level;
 use pt_store::trading::{Book, FillRow, LedgerEntry, OrderRow};
 use rust_decimal::Decimal;
 
 use crate::context::LiveContext;
 use crate::error::LiveError;
+use crate::halts::set_halt;
 use crate::status::map_status;
 
 /// What one call of [`settle`] did.
@@ -45,23 +45,16 @@ pub fn settle(ctx: &LiveContext) -> Result<SettleReport, LiveError> {
     let rows = ctx.store.orders_in_states(&open)?;
     let Some(earliest) = rows.iter().map(|r| r.trade_date).min() else {
         abandon_legs(ctx)?;
-        report.legs_released = released_legs(ctx)?;
         return Ok(report);
     };
     let after = Utc.from_utc_datetime(&earliest.and_time(NaiveTime::MIN));
     let activities = fill_activities(ctx.http, after)?;
-    let mut ledgered: HashSet<String> = ctx
-        .store
-        .ledger(Book::Paper)?
-        .into_iter()
-        .filter(|e| e.kind == "fill")
-        .filter_map(|e| e.ref_id)
-        .collect();
     let mut stored: HashMap<String, u64> = HashMap::new();
     for f in ctx.store.fills()? {
         *stored.entry(f.broker_order_id).or_default() += f.qty;
     }
 
+    let mut newly_filled: Vec<OrderRow> = Vec::new();
     for row in rows {
         let Some(wire) = order_by_client_id(ctx.http, &row.client_order_id)? else {
             continue;
@@ -74,13 +67,22 @@ pub fn settle(ctx: &LiveContext) -> Result<SettleReport, LiveError> {
             }
             Err(e) => return Err(e),
         };
-        for fill in activities.iter().filter(|f| f.order_id == wire.id) {
-            if record_fill(ctx, &row, fill, &mut ledgered)? {
-                report.fills_recorded += 1;
-                *stored.entry(fill.order_id.clone()).or_default() += fill.qty;
+        // An off-ledger order keeps its fills and ledger entries out of the
+        // books; the broker's own figures stand in for the stored fills.
+        let off_ledger = ctx.store.is_off_ledger(&row.client_order_id)?;
+        if !off_ledger {
+            for fill in activities.iter().filter(|f| f.order_id == wire.id) {
+                if record_fill(ctx, &row, fill)? {
+                    report.fills_recorded += 1;
+                    *stored.entry(fill.order_id.clone()).or_default() += fill.qty;
+                }
             }
         }
-        let stored_qty = stored.get(&wire.id).copied().unwrap_or(0);
+        let stored_qty = if off_ledger {
+            u64::MAX
+        } else {
+            stored.get(&wire.id).copied().unwrap_or(0)
+        };
         let (state, filled_qty) = supported(broker_state, wire.filled_qty, row.qty, stored_qty);
         if state == row.state && filled_qty == row.filled_qty {
             continue;
@@ -110,9 +112,12 @@ pub fn settle(ctx: &LiveContext) -> Result<SettleReport, LiveError> {
             ctx.clock.now_utc(),
         )?;
         report.orders_updated += 1;
+        if state == OrderState::Filled {
+            newly_filled.push(row);
+        }
     }
     abandon_legs(ctx)?;
-    report.legs_released = released_legs(ctx)?;
+    report.legs_released = released_legs(ctx, &newly_filled)?;
     Ok(report)
 }
 
@@ -120,29 +125,17 @@ pub fn settle(ctx: &LiveContext) -> Result<SettleReport, LiveError> {
 /// `halt_set` alert, unless one is already active. The order is left as it is.
 fn halt_unexpected(ctx: &LiveContext, row: &OrderRow, status: &str) -> Result<(), LiveError> {
     const REASON: &str = "unexpected_order_status";
-    if ctx.store.active_halts()?.iter().any(|h| h.reason == REASON) {
-        return Ok(());
-    }
     let detail = format!(
         "order {} reported status {status}, which the design never causes",
         row.client_order_id
     );
-    let now = ctx.clock.now_utc();
-    ctx.store.set_halt(REASON, &detail, now)?;
-    ctx.alerter.alert(
-        ctx.store,
-        Level::Critical,
-        "halt_set",
-        &format!("halt {REASON}: {detail}"),
-        None,
-        now,
-    );
+    set_halt(ctx, REASON, &detail)?;
     Ok(())
 }
 
 /// Moves each leg-2 intent whose leg 1 (same decision and symbol) ended
-/// unfilled (`Expired`, `Canceled` or `Rejected` with nothing filled) to
-/// `Abandoned`, with an `order_abandoned` alert recorded first so a crash
+/// short (`Expired`, `Canceled` or `Rejected` with less than its quantity
+/// filled, a partial fill included) to `Abandoned`, with an `order_abandoned` alert recorded first so a crash
 /// between the two repeats the alert rather than losing it.
 fn abandon_legs(ctx: &LiveContext) -> Result<(), LiveError> {
     let ended = [
@@ -154,7 +147,7 @@ fn abandon_legs(ctx: &LiveContext) -> Result<(), LiveError> {
         .store
         .orders_in_states(&ended)?
         .into_iter()
-        .filter(|o| o.filled_qty == 0)
+        .filter(|o| o.filled_qty < o.qty)
         .collect();
     for o in ctx.store.orders_in_states(&[OrderState::Intent])? {
         if o.leg != 2 || o.decision_id.is_none() {
@@ -170,8 +163,13 @@ fn abandon_legs(ctx: &LiveContext) -> Result<(), LiveError> {
             "warn",
             "order_abandoned",
             &format!(
-                "{} order {} abandoned: leg 1 {} ended {:?} unfilled",
-                o.symbol, o.client_order_id, leg1.client_order_id, leg1.state
+                "{} order {} abandoned: leg 1 {} ended {:?} with {} of {} filled",
+                o.symbol,
+                o.client_order_id,
+                leg1.client_order_id,
+                leg1.state,
+                leg1.filled_qty,
+                leg1.qty
             ),
             false,
             ctx.clock.now_utc(),
@@ -187,13 +185,13 @@ fn abandon_legs(ctx: &LiveContext) -> Result<(), LiveError> {
     Ok(())
 }
 
-/// Counts the leg-2 intents whose leg 1 (same decision and symbol) is `Filled`.
-fn released_legs(ctx: &LiveContext) -> Result<usize, LiveError> {
-    let filled = ctx.store.orders_in_states(&[OrderState::Filled])?;
+/// Counts the leg-2 intents whose leg 1 (same decision and symbol) became
+/// `Filled` in this settlement, so a repeat settle releases nothing.
+fn released_legs(ctx: &LiveContext, filled: &[OrderRow]) -> Result<usize, LiveError> {
     let intents = ctx.store.orders_in_states(&[OrderState::Intent])?;
     Ok(intents
         .iter()
-        .filter(|o| o.leg == 2 && leg1_filled(o, &filled))
+        .filter(|o| o.leg == 2 && leg1_filled(o, filled))
         .count())
 }
 
@@ -229,16 +227,15 @@ fn supported(
     }
 }
 
-/// Stores one fill of `row` and its Paper ledger entry, dated by the fill's
-/// UTC date. Returns true when the fill row is new. A fill already stored
-/// whose ledger entry is missing gets the entry, so the two stay paired.
-fn record_fill(
-    ctx: &LiveContext,
-    row: &OrderRow,
-    fill: &WireFill,
-    ledgered: &mut HashSet<String>,
-) -> Result<bool, LiveError> {
-    let inserted = ctx.store.insert_fill(&FillRow {
+/// Stores one fill of `row` and its Paper ledger entry in one transaction,
+/// the ledger entry dated by the fill's UTC date. Returns true when the fill
+/// is new. Every conversion that can fail happens before the write, so an
+/// error stores nothing.
+fn record_fill(ctx: &LiveContext, row: &OrderRow, fill: &WireFill) -> Result<bool, LiveError> {
+    let qty = i64::try_from(fill.qty)
+        .map_err(|_| LiveError::Invalid(format!("fill quantity {} too large", fill.qty)))?
+        * row.side.sign();
+    let fill_row = FillRow {
         activity_id: fill.id.clone(),
         broker_order_id: fill.order_id.clone(),
         symbol: row.symbol.clone(),
@@ -246,22 +243,16 @@ fn record_fill(
         qty: fill.qty,
         price: fill.price,
         at: fill.transaction_time,
-    })?;
-    if !ledgered.contains(&fill.id) {
-        let qty = i64::try_from(fill.qty)
-            .map_err(|_| LiveError::Invalid(format!("fill quantity {} too large", fill.qty)))?
-            * row.side.sign();
-        ctx.store.append_ledger(&LedgerEntry {
-            book: Book::Paper,
-            date: fill.transaction_time.date_naive(),
-            kind: "fill".to_string(),
-            symbol: Some(row.symbol.clone()),
-            qty,
-            price: Some(fill.price),
-            cash_delta: -(Decimal::from(qty) * fill.price),
-            ref_id: Some(fill.id.clone()),
-        })?;
-        ledgered.insert(fill.id.clone());
-    }
-    Ok(inserted)
+    };
+    let entry = LedgerEntry {
+        book: Book::Paper,
+        date: fill.transaction_time.date_naive(),
+        kind: "fill".to_string(),
+        symbol: Some(row.symbol.clone()),
+        qty,
+        price: Some(fill.price),
+        cash_delta: -(Decimal::from(qty) * fill.price),
+        ref_id: Some(fill.id.clone()),
+    };
+    Ok(ctx.store.record_fill(&fill_row, &entry)?)
 }

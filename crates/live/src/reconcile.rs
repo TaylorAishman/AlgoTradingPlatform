@@ -4,11 +4,11 @@ use std::collections::BTreeMap;
 
 use chrono::{DateTime, Utc};
 use pt_alpaca::{account, orders_read, reference};
-use pt_ops::alert::Level;
 use pt_store::trading::{Book, LedgerEntry};
 
 use crate::context::LiveContext;
 use crate::error::LiveError;
+use crate::halts::set_halt;
 use crate::snapshot::expected_last_session;
 
 /// The outcome of one reconciliation.
@@ -22,19 +22,7 @@ pub struct ReconcileReport {
 /// reason is already active (a halted run still reconciles). Returns the
 /// unclean report.
 fn halt(ctx: &LiveContext<'_>, reason: &str, detail: &str) -> Result<ReconcileReport, LiveError> {
-    let active = ctx.store.active_halts()?;
-    if !active.iter().any(|h| h.reason == reason) {
-        let now = ctx.clock.now_utc();
-        ctx.store.set_halt(reason, detail, now)?;
-        ctx.alerter.alert(
-            ctx.store,
-            Level::Critical,
-            "halt_set",
-            &format!("halt {reason}: {detail}"),
-            None,
-            now,
-        );
-    }
+    set_halt(ctx, reason, detail)?;
     Ok(ReconcileReport {
         clean: false,
         halt_reason: Some(reason.to_string()),

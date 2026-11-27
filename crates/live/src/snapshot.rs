@@ -2,6 +2,7 @@
 
 use crate::context::LiveContext;
 use crate::error::LiveError;
+use crate::halts::set_halt;
 use chrono::NaiveDate;
 use pt_alpaca::reference::WireClock;
 use pt_calendar::calendar::TradingCalendar;
@@ -116,13 +117,7 @@ pub fn check_halts(ctx: &LiveContext<'_>) -> Result<Option<HaltReason>, LiveErro
         HaltReason::DailyLoss => "daily_loss",
         HaltReason::Drawdown => "drawdown",
     };
-    if ctx.store.active_halts()?.iter().any(|h| h.reason == name) {
-        return Ok(Some(reason));
-    }
-    let now = ctx.clock.now_utc();
     let detail = format!("equity series breached the {name} limit");
-    ctx.store.set_halt(name, &detail, now)?;
-    ctx.alerter
-        .alert(ctx.store, Level::Critical, "halt_set", &detail, None, now);
+    set_halt(ctx, name, &detail)?;
     Ok(Some(reason))
 }
