@@ -52,7 +52,7 @@ fn dispatch(cli: &Cli) -> anyhow::Result<i32> {
             return Ok(EXIT_STAGE_FORBIDS);
         }
         // Every command with a minimum stage talks to the network. The client is
-        // not used by the stub command modules yet.
+        // not used by every command module yet.
         let _client = wiring::build_client()?;
     }
     match &cli.command {

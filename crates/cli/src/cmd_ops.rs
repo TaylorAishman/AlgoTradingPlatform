@@ -1,4 +1,4 @@
-//! `halt`, `report`, `status` and `signoff` commands (stubs).
+//! `halt`, `report`, `status` and `signoff` commands.
 
 use std::path::Path;
 use std::sync::Arc;
@@ -64,8 +64,8 @@ pub fn halt(action: &HaltCmd) -> anyhow::Result<i32> {
 
 /// Write `status.md` and `status.json` from the store. Needs no network.
 ///
-/// The fidelity section is left empty: computing it needs the strategy, which
-/// is built only inside the `run` command.
+/// The report inputs are assembled in `reporting.rs`, shared with `run`. The
+/// fidelity section is empty for now.
 pub fn report() -> anyhow::Result<i32> {
     let cfg = wiring::load_config()?;
     let owner = wiring::load_owner()?;
