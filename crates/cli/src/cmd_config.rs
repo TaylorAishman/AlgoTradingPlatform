@@ -1,4 +1,4 @@
-//! `config`, `gates`, `calendar` and `universe` commands (stubs).
+//! `config`, `gates`, `calendar` and `universe` commands.
 
 use crate::cli::{CalendarCmd, ConfigCmd, UniverseCmd};
 use chrono::NaiveDate;

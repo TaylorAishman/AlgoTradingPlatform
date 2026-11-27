@@ -8,6 +8,7 @@ mod cmd_kill;
 mod cmd_ops;
 mod cmd_run;
 mod cmd_validate;
+mod reporting;
 mod strategies;
 mod wiring;
 
@@ -35,7 +36,7 @@ fn minimum_stage(command: &Command) -> Option<(&'static str, Stage)> {
             action: UniverseCmd::Verify,
         } => Some(("universe verify", Stage::Ingest)),
         Command::Doctor => Some(("doctor", Stage::Ingest)),
-        Command::Run => Some(("run", Stage::Ingest)),
+        Command::Run(_) => Some(("run", Stage::Ingest)),
         Command::CancelOpen(_) => Some(("cancel-open", Stage::FirstOrder)),
         Command::Flatten(_) => Some(("flatten", Stage::Paper)),
         _ => None,
@@ -51,7 +52,7 @@ fn dispatch(cli: &Cli) -> anyhow::Result<i32> {
             return Ok(EXIT_STAGE_FORBIDS);
         }
         // Every command with a minimum stage talks to the network. The client is
-        // not used by the stub command modules yet.
+        // not used by every command module yet.
         let _client = wiring::build_client()?;
     }
     match &cli.command {
@@ -63,7 +64,7 @@ fn dispatch(cli: &Cli) -> anyhow::Result<i32> {
         Command::Doctor => cmd_data::doctor(),
         Command::Backtest { action } => cmd_backtest::backtest(action),
         Command::Validate { action } => cmd_validate::validate(action),
-        Command::Run => cmd_run::run(),
+        Command::Run(args) => cmd_run::run(args),
         Command::Halt { action } => cmd_ops::halt(action),
         Command::CancelOpen(args) => cmd_kill::cancel_open(args),
         Command::Flatten(args) => cmd_kill::flatten(args),

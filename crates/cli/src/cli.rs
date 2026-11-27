@@ -7,6 +7,9 @@ use std::path::PathBuf;
 
 use clap::{Args, Parser, Subcommand};
 
+use crate::cmd_backtest::BacktestCmd;
+use crate::cmd_run::RunArgs;
+
 /// Paper trading with an auditable store: backtest, validate, run daily.
 #[derive(Debug, Parser)]
 #[command(name = "trader", version, about)]
@@ -56,7 +59,7 @@ pub enum Command {
         action: ValidateCmd,
     },
     /// Run every phase that is due; safe to repeat
-    Run,
+    Run(RunArgs),
     /// Inspect or change halts
     Halt {
         #[command(subcommand)]
@@ -126,29 +129,6 @@ pub enum DataCmd {
 pub enum UniverseCmd {
     /// Verify every universe symbol
     Verify,
-}
-
-#[derive(Debug, Subcommand)]
-pub enum BacktestCmd {
-    /// Run a backtest
-    Run {
-        #[arg(long)]
-        from: String,
-        #[arg(long)]
-        to: String,
-        /// Strategy name (default from the config)
-        #[arg(long)]
-        strategy: Option<String>,
-    },
-    /// Compare the event and vector engines
-    Crosscheck {
-        #[arg(long)]
-        from: String,
-        #[arg(long)]
-        to: String,
-        #[arg(long)]
-        with_costs: bool,
-    },
 }
 
 #[derive(Debug, Subcommand)]

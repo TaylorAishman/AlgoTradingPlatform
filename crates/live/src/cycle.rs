@@ -5,7 +5,6 @@
 
 use pt_alpaca::reference::{clock, WireClock};
 use pt_config::hash::config_hash;
-use pt_core::order_state::OrderState;
 use pt_data::ingest::ingest;
 use pt_data::reference::{sync_assets, sync_calendar};
 use pt_gate::gate::{AuthContext, Capability};
@@ -14,7 +13,10 @@ use pt_ops::alert::Level;
 
 use crate::context::LiveContext;
 use crate::error::LiveError;
-use crate::first_order::first_order;
+use crate::first_order::{
+    approval_differs_from_accepted, first_order, first_order_accepted, first_order_attempt_base,
+    plan_first_order_retry, RETRY_WAITS_SECS,
+};
 use crate::rebalance::{rebalance, RebalanceOutcome};
 use crate::reconcile::reconcile;
 use crate::settle::settle;
@@ -45,7 +47,7 @@ pub struct RunOutcome {
 /// stages that allow them.
 pub fn run_cycle(ctx: &LiveContext) -> Result<RunOutcome, LiveError> {
     ctx.gate.allows(Capability::TradingRead)?;
-    let stage = stage_name(ctx.gate.stage());
+    let stage = ctx.gate.stage().as_str();
     let run_id = ctx.store.start_run(
         stage,
         &config_hash(ctx.cfg),
@@ -185,8 +187,23 @@ fn first_order_phases(
     }
 
     // Read before planning, so the order planned by this run is not counted.
-    let already_sent = first_order_sent(ctx)?;
-    first_order(ctx, wire_clock)?;
+    let already_sent = first_order_accepted(ctx.store)?;
+    if already_sent {
+        // R-500: once an order is accepted, a different approval is ignored.
+        if approval_differs_from_accepted(ctx)? {
+            ctx.alerter.alert(
+                ctx.store,
+                Level::Warn,
+                "first_order_ignored",
+                "the first order was already accepted; the edited approval is ignored",
+                None,
+                ctx.clock.now_utc(),
+            );
+        }
+    } else {
+        first_order(ctx, wire_clock)?;
+    }
+    let attempt_base = first_order_attempt_base(ctx, wire_clock)?;
     phases.push("first_order".to_string());
 
     let auth = AuthContext {
@@ -197,25 +214,36 @@ fn first_order_phases(
         is_first_order: true,
         first_order_already_sent: already_sent,
     };
-    submit_planned(ctx, &auth)?;
+    let mut report = submit_planned(ctx, &auth)?;
+    let mut retried_all = true;
+    // A rejected first order is tried again under a new id, after a wait.
+    for (i, wait) in RETRY_WAITS_SECS.iter().enumerate() {
+        if report.rejected == 0 {
+            retried_all = false;
+            break;
+        }
+        ctx.http.sleep(std::time::Duration::from_secs(*wait));
+        if !plan_first_order_retry(ctx, wire_clock, attempt_base + i as u32 + 1)? {
+            retried_all = false;
+            break;
+        }
+        report = submit_planned(ctx, &auth)?;
+    }
     phases.push("submit".to_string());
+    // R-497: every retry used and the last one rejected. Fail the run with one
+    // critical alert; no halt is set, and the dead approval is not tried again.
+    if retried_all && report.rejected > 0 {
+        ctx.alerter.alert(
+            ctx.store,
+            Level::Critical,
+            "first_order_exhausted",
+            "the first order was rejected on every attempt; no more retries",
+            None,
+            ctx.clock.now_utc(),
+        );
+        return Ok(RunStatus::Failed);
+    }
     Ok(RunStatus::Ok)
-}
-
-/// Whether a first order has ever reached the broker: any stored first-order
-/// id in a state past `Intent` that a POST produced.
-fn first_order_sent(ctx: &LiveContext) -> Result<bool, LiveError> {
-    let sent = ctx.store.orders_in_states(&[
-        OrderState::Submitted,
-        OrderState::PartiallyFilled,
-        OrderState::Filled,
-        OrderState::Canceled,
-        OrderState::Expired,
-        OrderState::Rejected,
-    ])?;
-    Ok(sent
-        .iter()
-        .any(|o| o.client_order_id.starts_with("pt-first-")))
 }
 
 /// The paper-stage phases, after the read-only ones: the guard phases, then
@@ -255,16 +283,6 @@ fn paper_phases(
     submit_planned(ctx, &auth)?;
     phases.push("submit".to_string());
     Ok(RunStatus::Ok)
-}
-
-fn stage_name(stage: Stage) -> &'static str {
-    match stage {
-        Stage::Backtest => "backtest",
-        Stage::Ingest => "ingest",
-        Stage::DryRun => "dry_run",
-        Stage::FirstOrder => "first_order",
-        Stage::Paper => "paper",
-    }
 }
 
 fn status_name(status: RunStatus) -> &'static str {

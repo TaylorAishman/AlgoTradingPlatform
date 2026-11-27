@@ -4,6 +4,7 @@ use std::path::Path;
 
 use anyhow::Context;
 use chrono::NaiveDate;
+use clap::Subcommand;
 use pt_core::clock::SystemClock;
 use pt_store::db::Store;
 use pt_validate::crosscheck::crosscheck as run_crosscheck;
@@ -12,11 +13,33 @@ use pt_validate::overfit::dsr_for_run;
 use pt_validate::runner::{run_and_record, BacktestRequest};
 use rust_decimal::Decimal;
 
-use crate::cli::BacktestCmd;
 use crate::wiring;
 
 /// Starting capital of a research backtest.
 const INITIAL_CAPITAL: i64 = 100_000;
+
+#[derive(Debug, Subcommand)]
+pub enum BacktestCmd {
+    /// Run a backtest
+    Run {
+        #[arg(long)]
+        from: String,
+        #[arg(long)]
+        to: String,
+        /// Strategy name (default from the config)
+        #[arg(long)]
+        strategy: Option<String>,
+    },
+    /// Compare the event and vector engines
+    Crosscheck {
+        #[arg(long)]
+        from: String,
+        #[arg(long)]
+        to: String,
+        #[arg(long)]
+        with_costs: bool,
+    },
+}
 
 pub fn backtest(action: &BacktestCmd) -> anyhow::Result<i32> {
     match action {

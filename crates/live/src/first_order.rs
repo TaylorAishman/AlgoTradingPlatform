@@ -1,13 +1,15 @@
 use pt_alpaca::reference::WireClock;
 use pt_core::order_state::OrderState;
 use pt_core::types::{Side, Symbol};
+use pt_store::db::Store;
 use pt_store::error::StoreError;
 use pt_store::trading::OrderRow;
 use rust_decimal::Decimal;
 
+use crate::adopt::adopt_if_held;
 use crate::context::LiveContext;
 use crate::error::LiveError;
-use crate::ids::first_order_id;
+use crate::ids::{first_order_id, first_order_retry_id};
 use crate::snapshot::trade_session;
 
 /// Plans the owner's approved first order as an `Intent` order, but only on
@@ -31,12 +33,20 @@ pub fn first_order(ctx: &LiveContext, wire_clock: &WireClock) -> Result<bool, Li
     };
     let symbol = Symbol::new(&approval.symbol)
         .map_err(|e| LiveError::Invalid(format!("symbol \"{}\": {e}", approval.symbol)))?;
+    // R-499: an approval edited after its attempts died gets a new attempt
+    // numbered after the stored ones; an unchanged one adds nothing.
+    let stored = stored_attempts(ctx, approval.valid_on, &approval.symbol)?;
+    let client_order_id = match stored.last() {
+        None => first_order_id(approval.valid_on, &approval.symbol),
+        Some(last) if last.side == side && last.qty == approval.qty => return Ok(true),
+        Some(_) => first_order_retry_id(approval.valid_on, &approval.symbol, stored.len() as u32),
+    };
     let res = ctx.store.insert_order(&OrderRow {
-        client_order_id: first_order_id(approval.valid_on, &approval.symbol),
+        client_order_id,
         decision_id: None,
         symbol,
         side,
-        qty: approval.max_qty,
+        qty: approval.qty,
         leg: 0,
         state: OrderState::Intent,
         broker_order_id: None,
@@ -48,4 +58,138 @@ pub fn first_order(ctx: &LiveContext, wire_clock: &WireClock) -> Result<bool, Li
         Ok(()) | Err(StoreError::Duplicate(_)) => Ok(true),
         Err(e) => Err(e.into()),
     }
+}
+
+/// Waits between a rejected first order and each retry (R-495), in seconds.
+pub const RETRY_WAITS_SECS: [u64; 5] = [1, 2, 4, 8, 16];
+
+/// Plans the `attempt`th retry (counting from 1) of the approved first order
+/// as a new `Intent` order under a new client order id (R-494). Returns
+/// whether an order is planned; false when there is no approval for today.
+pub fn plan_first_order_retry(
+    ctx: &LiveContext,
+    wire_clock: &WireClock,
+    attempt: u32,
+) -> Result<bool, LiveError> {
+    let Some(approval) = ctx.gate.first_order() else {
+        return Ok(false);
+    };
+    if approval.valid_on != trade_session(wire_clock) {
+        return Ok(false);
+    }
+    // R-496: the broker may hold the previous attempt despite its error.
+    // Adopt it instead of sending a duplicate under a new id.
+    let previous = if attempt <= 1 {
+        first_order_id(approval.valid_on, &approval.symbol)
+    } else {
+        first_order_retry_id(approval.valid_on, &approval.symbol, attempt - 1)
+    };
+    if adopt_if_held(ctx, &previous)? {
+        return Ok(true);
+    }
+    let side = match approval.side.as_str() {
+        "buy" => Side::Buy,
+        "sell" => Side::Sell,
+        other => {
+            return Err(LiveError::Invalid(format!(
+                "first order side \"{other}\" is not buy or sell"
+            )))
+        }
+    };
+    let symbol = Symbol::new(&approval.symbol)
+        .map_err(|e| LiveError::Invalid(format!("symbol \"{}\": {e}", approval.symbol)))?;
+    let res = ctx.store.insert_order(&OrderRow {
+        client_order_id: first_order_retry_id(approval.valid_on, &approval.symbol, attempt),
+        decision_id: None,
+        symbol,
+        side,
+        qty: approval.qty,
+        leg: 0,
+        state: OrderState::Intent,
+        broker_order_id: None,
+        filled_qty: 0,
+        reference_price: Decimal::ZERO,
+        trade_date: approval.valid_on,
+    });
+    match res {
+        Ok(()) | Err(StoreError::Duplicate(_)) => Ok(true),
+        Err(e) => Err(e.into()),
+    }
+}
+
+/// Whether the broker has accepted a first order (R-493): any stored
+/// first-order row, retries included, in a state a broker acceptance leads to.
+/// An `Intent` or `Rejected` row does not count.
+pub fn first_order_accepted(store: &Store) -> Result<bool, LiveError> {
+    let accepted = store.orders_in_states(&[
+        OrderState::Submitted,
+        OrderState::PartiallyFilled,
+        OrderState::Filled,
+        OrderState::Canceled,
+        OrderState::Expired,
+    ])?;
+    Ok(accepted
+        .iter()
+        .any(|o| o.client_order_id.starts_with("pt-first-")))
+}
+
+/// The stored attempts of the approval for `symbol` on `valid_on`, in order:
+/// the first id, then `-r1`, `-r2` and so on until the first gap.
+fn stored_attempts(
+    ctx: &LiveContext,
+    valid_on: chrono::NaiveDate,
+    symbol: &str,
+) -> Result<Vec<OrderRow>, LiveError> {
+    let mut rows = Vec::new();
+    while let Some(row) = ctx.store.order(&if rows.is_empty() {
+        first_order_id(valid_on, symbol)
+    } else {
+        first_order_retry_id(valid_on, symbol, rows.len() as u32)
+    })? {
+        rows.push(row);
+    }
+    Ok(rows)
+}
+
+/// The number of retries already stored for today's approval: the attempt
+/// number of its latest order. New retries are numbered after it (R-499).
+pub fn first_order_attempt_base(
+    ctx: &LiveContext,
+    wire_clock: &WireClock,
+) -> Result<u32, LiveError> {
+    let Some(approval) = ctx.gate.first_order() else {
+        return Ok(0);
+    };
+    if approval.valid_on != trade_session(wire_clock) {
+        return Ok(0);
+    }
+    let n = stored_attempts(ctx, approval.valid_on, &approval.symbol)?.len();
+    Ok(n.saturating_sub(1) as u32)
+}
+
+/// Whether today's approval differs from the first order the broker accepted
+/// (R-500): a different symbol, side or quantity.
+pub fn approval_differs_from_accepted(ctx: &LiveContext) -> Result<bool, LiveError> {
+    let Some(approval) = ctx.gate.first_order() else {
+        return Ok(false);
+    };
+    let accepted = ctx.store.orders_in_states(&[
+        OrderState::Submitted,
+        OrderState::PartiallyFilled,
+        OrderState::Filled,
+        OrderState::Canceled,
+        OrderState::Expired,
+    ])?;
+    let Some(row) = accepted
+        .iter()
+        .find(|o| o.client_order_id.starts_with("pt-first-"))
+    else {
+        return Ok(false);
+    };
+    let side = match approval.side.as_str() {
+        "buy" => Side::Buy,
+        "sell" => Side::Sell,
+        _ => return Ok(true),
+    };
+    Ok(row.symbol.as_str() != approval.symbol || row.side != side || row.qty != approval.qty)
 }
