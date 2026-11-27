@@ -122,8 +122,8 @@ fn halt_unexpected(ctx: &LiveContext, row: &OrderRow, status: &str) -> Result<()
 }
 
 /// Moves each leg-2 intent whose leg 1 (same decision and symbol) ended
-/// unfilled (`Expired`, `Canceled` or `Rejected` with nothing filled) to
-/// `Abandoned`, with an `order_abandoned` alert recorded first so a crash
+/// short (`Expired`, `Canceled` or `Rejected` with less than its quantity
+/// filled, a partial fill included) to `Abandoned`, with an `order_abandoned` alert recorded first so a crash
 /// between the two repeats the alert rather than losing it.
 fn abandon_legs(ctx: &LiveContext) -> Result<(), LiveError> {
     let ended = [
@@ -135,7 +135,7 @@ fn abandon_legs(ctx: &LiveContext) -> Result<(), LiveError> {
         .store
         .orders_in_states(&ended)?
         .into_iter()
-        .filter(|o| o.filled_qty == 0)
+        .filter(|o| o.filled_qty < o.qty)
         .collect();
     for o in ctx.store.orders_in_states(&[OrderState::Intent])? {
         if o.leg != 2 || o.decision_id.is_none() {
@@ -151,8 +151,13 @@ fn abandon_legs(ctx: &LiveContext) -> Result<(), LiveError> {
             "warn",
             "order_abandoned",
             &format!(
-                "{} order {} abandoned: leg 1 {} ended {:?} unfilled",
-                o.symbol, o.client_order_id, leg1.client_order_id, leg1.state
+                "{} order {} abandoned: leg 1 {} ended {:?} with {} of {} filled",
+                o.symbol,
+                o.client_order_id,
+                leg1.client_order_id,
+                leg1.state,
+                leg1.filled_qty,
+                leg1.qty
             ),
             false,
             ctx.clock.now_utc(),
