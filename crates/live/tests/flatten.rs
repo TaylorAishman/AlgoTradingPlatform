@@ -72,7 +72,7 @@ fn qty_of(body: &serde_json::Value) -> String {
 fn flatten_while_halted_closes_both_positions_and_returns_two() {
     let fx = halted_fixture();
 
-    let n = flatten(&fx.ctx()).expect("flatten while halted");
+    let n = flatten(&fx.ctx()).expect("flatten while halted").accepted;
 
     assert_eq!(n, 2);
     let posts = order_posts(&fx);
@@ -184,7 +184,9 @@ fn a_broker_rejection_marks_that_order_rejected_alerts_and_still_closes_the_rest
         ..fx.ctx()
     };
 
-    let n = flatten(&ctx).expect("a rejection does not abort the flatten");
+    let n = flatten(&ctx)
+        .expect("a rejection does not abort the flatten")
+        .accepted;
 
     assert_eq!(n, 1, "only the accepted order counts as sent");
     let posts = order_posts(&fx);
@@ -229,7 +231,7 @@ fn a_repeat_flatten_adopts_an_order_the_broker_already_holds_without_posting_it(
         .expect("broker holds the order")
         .id;
 
-    let n = flatten(&fx.ctx()).expect("repeat flatten");
+    let n = flatten(&fx.ctx()).expect("repeat flatten").accepted;
 
     assert_eq!(n, 1, "only TLT is sent");
     let posts = order_posts(&fx);
@@ -252,7 +254,9 @@ fn a_retry_after_a_rejection_sends_one_fresh_order_and_keeps_one_flattened_halt(
     flatten(&ctx).expect("first flatten");
     let before = order_posts(&fx).len();
 
-    let n = flatten(&fx.ctx()).expect("retry after a rejection");
+    let n = flatten(&fx.ctx())
+        .expect("retry after a rejection")
+        .accepted;
 
     assert_eq!(n, 1, "only the rejected SPY is sent again");
     let posts = order_posts(&fx);

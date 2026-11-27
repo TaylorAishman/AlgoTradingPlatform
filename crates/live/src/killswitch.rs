@@ -52,8 +52,20 @@ pub fn cancel_open(ctx: &LiveContext) -> Result<usize, LiveError> {
     Ok(cancelled)
 }
 
+/// What [`flatten`] did: orders cancelled, orders the broker accepted and
+/// orders the broker rejected. Adopted and already-working orders count in none.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
+pub struct FlattenReport {
+    /// Open orders cancelled before closing (`flatten` does not cancel yet).
+    pub cancelled: usize,
+    /// Orders sent and accepted by the broker.
+    pub accepted: usize,
+    /// Orders the broker rejected.
+    pub rejected: usize,
+}
+
 /// Closes every position the broker holds with one market day order per
-/// symbol, in symbol order, and returns how many orders were sent.
+/// symbol, in symbol order, and returns a [`FlattenReport`].
 ///
 /// Only the stage is checked up front, so an active halt does not stop this.
 /// A `flattened` halt is set (unless one is already active) before any order
@@ -74,15 +86,15 @@ pub fn cancel_open(ctx: &LiveContext) -> Result<usize, LiveError> {
 ///
 /// A broker rejection marks that order `Rejected`, records an `order_rejected`
 /// alert and carries on with the remaining symbols, so one refused symbol
-/// never stops the rest from closing. The returned count is the orders sent
-/// and accepted by this call; working, adopted and rejected orders are not
-/// counted, and a partial failure is reported only through its alert. A gate
+/// never stops the rest from closing. The report counts the orders sent
+/// and accepted by this call and those rejected; working and adopted orders
+/// are in neither, and a partial failure is reported only through its alert. A gate
 /// refusal or any other error stops the call.
 ///
 /// After [`cancel_open`], run [`crate::settle::settle`] before `flatten`: a
 /// cancelled order's stored row stays `Submitted` until settle, and `flatten`
 /// skips a symbol whose row is `Submitted`.
-pub fn flatten(ctx: &LiveContext) -> Result<usize, LiveError> {
+pub fn flatten(ctx: &LiveContext) -> Result<FlattenReport, LiveError> {
     ctx.gate.allows(Capability::SubmitOrder)?;
     if !ctx
         .store
@@ -109,6 +121,7 @@ pub fn flatten(ctx: &LiveContext) -> Result<usize, LiveError> {
         first_order_already_sent: false,
     };
     let mut placed = 0;
+    let mut rejected = 0;
     for p in held {
         let base = flatten_order_id(today, &p.symbol);
         let (mut client_order_id, mut retry) = (base.clone(), 0);
@@ -200,6 +213,7 @@ pub fn flatten(ctx: &LiveContext) -> Result<usize, LiveError> {
                     None,
                     now,
                 );
+                rejected += 1;
                 continue;
             }
             Err(other) => return Err(other.into()),
@@ -213,7 +227,11 @@ pub fn flatten(ctx: &LiveContext) -> Result<usize, LiveError> {
         )?;
         placed += 1;
     }
-    Ok(placed)
+    Ok(FlattenReport {
+        cancelled: 0,
+        accepted: placed,
+        rejected,
+    })
 }
 
 /// Identifier of a flatten order: `pt-flatten-<yyyymmdd>-<symbol>`.
