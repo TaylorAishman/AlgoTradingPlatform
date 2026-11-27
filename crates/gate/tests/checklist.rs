@@ -4,7 +4,7 @@ use chrono::NaiveDate;
 use pt_gate::owner::{FirstOrderApproval, OwnerFile, Stage};
 use pt_gate::status::{gate_status, Facts};
 
-const IDS: [&str; 12] = [
+const IDS: [&str; 13] = [
     "api_keys",
     "calendar",
     "bars",
@@ -14,6 +14,7 @@ const IDS: [&str; 12] = [
     "account_flat",
     "first_order_approval",
     "stage_first_order",
+    "first_order_sent",
     "strategy_allowlist",
     "stage_paper",
     "validation_signoff",
@@ -82,7 +83,7 @@ fn default_owner_file_and_no_facts_leave_every_item_pending() {
 fn paper_stage_with_everything_set_and_all_facts_marks_every_item_done() {
     // R-270
     let items = gate_status(&full_owner(), &all_facts());
-    assert_eq!(items.len(), 12);
+    assert_eq!(items.len(), 13);
     for item in &items {
         assert!(item.done, "{} should be done", item.id);
         assert!(!item.instruction.is_empty());
@@ -99,4 +100,16 @@ fn dry_run_stage_marks_the_ingest_and_dry_run_stage_items_done_only() {
     let items = gate_status(&owner, &no_facts());
     let done: Vec<&str> = items.iter().filter(|i| i.done).map(|i| i.id).collect();
     assert_eq!(done, ["stage_ingest", "stage_dry_run"]);
+}
+
+#[test]
+fn with_every_fact_true_except_first_order_sent_only_that_item_is_pending() {
+    // R-270
+    let facts = Facts {
+        first_order_sent: false,
+        ..all_facts()
+    };
+    let items = gate_status(&full_owner(), &facts);
+    let pending: Vec<&str> = items.iter().filter(|i| !i.done).map(|i| i.id).collect();
+    assert_eq!(pending, ["first_order_sent"]);
 }

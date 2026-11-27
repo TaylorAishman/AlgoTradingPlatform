@@ -64,6 +64,12 @@ pub fn simulate(
     view: &dyn MarketView,
     cal: &TradingCalendar,
 ) -> Result<SimResult, EngineError> {
+    if cfg.start > cfg.end {
+        return Err(EngineError::Invalid(format!(
+            "start {} is after end {}",
+            cfg.start, cfg.end
+        )));
+    }
     if !cal.is_session(cfg.start) {
         return Err(EngineError::Invalid(format!(
             "start {} is not a session",

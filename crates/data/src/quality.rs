@@ -70,3 +70,22 @@ pub fn check_gaps(store: &Store, cfg: &Config, through: NaiveDate) -> Result<Vec
     }
     Ok(gaps)
 }
+
+/// R-443: universe symbols with no stored raw bar at all, in universe order.
+/// `check_gaps` skips such symbols, so this is the only place they are reported.
+pub fn symbols_without_bars(store: &Store, cfg: &Config) -> Result<Vec<Symbol>, DataError> {
+    // Dates are stored as ISO text, so the bounds must keep four-digit years:
+    // `NaiveDate::MIN`/`MAX` render with a sign and would not compare as dates.
+    let first = NaiveDate::from_ymd_opt(1, 1, 1).expect("valid date");
+    let last = NaiveDate::from_ymd_opt(9999, 12, 31).expect("valid date");
+    let mut missing = Vec::new();
+    for item in &cfg.universe {
+        let name = item.symbol.as_str();
+        let symbol = Symbol::new(name).map_err(|e| DataError::Invalid(format!("{name}: {e}")))?;
+        let bars = store.bars_asof(&symbol, Adjustment::Raw, &cfg.data.feed, first, last, None)?;
+        if bars.is_empty() {
+            missing.push(symbol);
+        }
+    }
+    Ok(missing)
+}

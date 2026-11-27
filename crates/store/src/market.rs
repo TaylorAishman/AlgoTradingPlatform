@@ -64,18 +64,47 @@ impl Store {
     /// For each row: if its series has no version for that date it is
     /// inserted; if the latest version has the same values it is left
     /// unchanged and no row is written; otherwise a new version is added and
-    /// the older ones are kept.
+    /// the older ones are kept. A differing bar fetched earlier than the stored
+    /// version is refused with `StoreError::Invalid` and nothing is stored.
     pub fn upsert_bars(
         &self,
         rows: &[BarRow],
         fetched_at: DateTime<Utc>,
     ) -> Result<UpsertStats, StoreError> {
+        let mut seen: std::collections::HashMap<(&str, chrono::NaiveDate, &str, &str), &BarRow> =
+            std::collections::HashMap::new();
+        for row in rows {
+            let b = &row.bar;
+            let key = (
+                b.symbol.as_str(),
+                b.date,
+                adjustment_text(row.adjustment),
+                row.feed.as_str(),
+            );
+            if let Some(first) = seen.insert(key, row) {
+                let f = &first.bar;
+                let same = f.open.value() == b.open.value()
+                    && f.high.value() == b.high.value()
+                    && f.low.value() == b.low.value()
+                    && f.close.value() == b.close.value()
+                    && f.volume == b.volume;
+                if !same {
+                    return Err(StoreError::Duplicate(format!(
+                        "two different bars for {} on {} ({}, {}) in one batch",
+                        b.symbol.as_str(),
+                        b.date.format("%Y-%m-%d"),
+                        adjustment_text(row.adjustment),
+                        row.feed
+                    )));
+                }
+            }
+        }
         let fetched = instant_text(fetched_at);
         let tx = self.conn.unchecked_transaction()?;
         let mut stats = UpsertStats::default();
         {
             let mut latest = tx.prepare(
-                "SELECT open, high, low, close, volume FROM bars
+                "SELECT open, high, low, close, volume, fetched_at FROM bars
                  WHERE symbol = ?1 AND date = ?2 AND adjustment = ?3 AND feed = ?4
                  ORDER BY fetched_at DESC LIMIT 1",
             )?;
@@ -100,11 +129,13 @@ impl Store {
                             r.get::<_, String>(2)?,
                             r.get::<_, String>(3)?,
                             r.get::<_, i64>(4)?,
+                            r.get::<_, String>(5)?,
                         ))
                     })
                     .optional()?;
+                let stored_at = found.as_ref().map(|f| f.5.clone());
                 let stored = found
-                    .map(|(o, h, l, c, v)| -> Result<Stored, StoreError> {
+                    .map(|(o, h, l, c, v, _)| -> Result<Stored, StoreError> {
                         Ok(Stored {
                             open: text_to_dec(&o)?,
                             high: text_to_dec(&h)?,
@@ -126,7 +157,16 @@ impl Store {
                         stats.unchanged += 1;
                         continue;
                     }
-                    Some(_) => stats.restated += 1,
+                    Some(_) => {
+                        if stored_at.is_some_and(|at| at > fetched) {
+                            return Err(StoreError::Invalid(format!(
+                                "bar for {symbol} on {date} ({adjustment}, {}) fetched at {fetched} \
+                                 is older than the stored version",
+                                row.feed
+                            )));
+                        }
+                        stats.restated += 1
+                    }
                     None => stats.inserted += 1,
                 }
                 insert.execute(params![
@@ -249,25 +289,48 @@ impl Store {
         TradingCalendar::new(dates).map_err(|e| StoreError::Codec(e.to_string()))
     }
 
-    /// Stores an asset snapshot fetched at `fetched_at`. A snapshot for the
-    /// same symbol and instant is replaced.
+    /// Stores an asset snapshot fetched at `fetched_at`. The first snapshot for
+    /// a symbol and instant is kept: an identical repeat is accepted, a
+    /// different one is `StoreError::Duplicate`.
     pub fn put_asset_snapshot(
         &self,
         snapshot: &AssetSnapshot,
         fetched_at: DateTime<Utc>,
     ) -> Result<(), StoreError> {
-        self.conn.execute(
-            "INSERT OR REPLACE INTO asset_snapshots
+        let at = instant_text(fetched_at);
+        let changed = self.conn.execute(
+            "INSERT OR IGNORE INTO asset_snapshots
              (symbol, fetched_at, tradable, shortable, easy_to_borrow)
              VALUES (?1, ?2, ?3, ?4, ?5)",
             params![
                 snapshot.symbol.as_str(),
-                instant_text(fetched_at),
+                at,
                 snapshot.tradable,
                 snapshot.shortable,
                 snapshot.easy_to_borrow,
             ],
         )?;
+        if changed == 0 {
+            let same: bool = self.conn.query_row(
+                "SELECT tradable = ?3 AND shortable = ?4 AND easy_to_borrow = ?5
+                 FROM asset_snapshots WHERE symbol = ?1 AND fetched_at = ?2",
+                params![
+                    snapshot.symbol.as_str(),
+                    at,
+                    snapshot.tradable,
+                    snapshot.shortable,
+                    snapshot.easy_to_borrow,
+                ],
+                |r| r.get(0),
+            )?;
+            if !same {
+                return Err(StoreError::Duplicate(format!(
+                    "asset snapshot for {} at {}",
+                    snapshot.symbol.as_str(),
+                    at
+                )));
+            }
+        }
         Ok(())
     }
 

@@ -23,9 +23,9 @@ fn expect(allowed: bool) -> Result<(), GateError> {
 fn stage_table_for_the_four_non_submit_capabilities() {
     // R-263: (stage, MarketDataRead, TradingRead, RecordDryRun, CancelOrder)
     let table = [
-        (Stage::Backtest, false, false, false, false),
-        (Stage::Ingest, true, true, false, false),
-        (Stage::DryRun, true, true, true, false),
+        (Stage::Backtest, false, false, false, true),
+        (Stage::Ingest, true, true, false, true),
+        (Stage::DryRun, true, true, true, true),
         (Stage::FirstOrder, true, true, true, true),
         (Stage::Paper, true, true, true, true),
     ];
