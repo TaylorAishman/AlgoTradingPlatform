@@ -32,7 +32,6 @@ pub fn run(_args: &RunArgs) -> anyhow::Result<i32> {
     let cfg = wiring::load_config()?;
     let owner = wiring::load_owner()?;
     let keys = wiring::load_keys()?;
-    let store = wiring::open_store(&cfg.run.db_path)?;
     let _lock = match acquire_run_lock(Path::new(&cfg.run.db_path)) {
         Ok(lock) => lock,
         Err(LiveError::AlreadyRunning) => {
@@ -44,6 +43,7 @@ pub fn run(_args: &RunArgs) -> anyhow::Result<i32> {
         }
         Err(e) => return Err(e.into()),
     };
+    let store = wiring::open_store(&cfg.run.db_path)?;
     let http = wiring::build_client()?;
 
     let alerter = Alerter::new(
