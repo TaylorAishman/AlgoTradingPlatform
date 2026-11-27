@@ -99,3 +99,55 @@ fn carries_the_system_not_strategy_sentence() {
     // R-343
     assert!(written(&report(Verdict::Pass, "sip")).contains(SENTENCE));
 }
+
+fn cells(line: &str) -> Vec<String> {
+    line.trim()
+        .trim_start_matches('|')
+        .trim_end_matches('|')
+        .split('|')
+        .map(|c| c.trim().to_string())
+        .collect()
+}
+
+#[test]
+fn non_empty_lines_have_the_fixed_layout_in_order() {
+    // R-521
+    let r = SignoffReport {
+        verdict: Verdict::NotReady,
+        criteria: vec![
+            criterion("replay_mismatches", 0.0, 0.0, true),
+            criterion("mean_diff", 1.2, 1.0, false),
+        ],
+        feed: "iex".to_string(),
+    };
+    let text = written(&r);
+    let lines: Vec<&str> = text.lines().filter(|l| !l.trim().is_empty()).collect();
+    assert_eq!(lines.len(), 8, "{text}");
+    assert_eq!(lines[0], "# Paper-trading sign-off");
+    assert_eq!(lines[1], "Verdict: NOT READY");
+    assert_eq!(lines[2], "Data feed: iex");
+    assert_eq!(
+        cells(lines[3]),
+        ["Criterion", "Value", "Limit", "Result"],
+        "{text}"
+    );
+    let sep = cells(lines[4]);
+    assert_eq!(sep.len(), 4, "{text}");
+    assert!(
+        sep.iter()
+            .all(|c| !c.is_empty() && c.chars().all(|ch| ch == '-' || ch == ':')),
+        "{text}"
+    );
+    assert_eq!(cells(lines[5]), ["replay_mismatches", "0", "0", "PASS"]);
+    assert_eq!(cells(lines[6]), ["mean_diff", "1.2", "1", "FAIL"]);
+    assert_eq!(lines[7], SENTENCE);
+}
+
+#[test]
+fn verdict_line_uses_pass_and_fail_words() {
+    // R-521
+    let text = written(&report(Verdict::Pass, "sip"));
+    assert!(text.lines().any(|l| l == "Verdict: PASS"), "{text}");
+    let text = written(&report(Verdict::Fail, "sip"));
+    assert!(text.lines().any(|l| l == "Verdict: FAIL"), "{text}");
+}

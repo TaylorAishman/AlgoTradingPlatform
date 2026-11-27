@@ -3,7 +3,9 @@
 use chrono::{DateTime, NaiveDate, NaiveTime, SecondsFormat, Utc};
 use pt_core::order_state::{transition_allowed, OrderState};
 use pt_core::types::{Positions, Side, Symbol};
-use rusqlite::{params, params_from_iter, Row, Transaction, TransactionBehavior};
+use rusqlite::{
+    params, params_from_iter, Connection, OptionalExtension, Row, Transaction, TransactionBehavior,
+};
 use rust_decimal::Decimal;
 
 use crate::codec::{dec_to_text, text_to_dec};
@@ -199,30 +201,30 @@ impl Store {
     /// A second decision for the same strategy, signal date and mode is
     /// `StoreError::Duplicate`.
     pub fn insert_decision(&self, d: &DecisionRow) -> Result<i64, StoreError> {
-        let res = self.conn.execute(
-            "INSERT INTO decisions (strategy_id, signal_date, trade_date, mode, status, \
-             inputs_json, outputs_json, created_at) VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8)",
-            params![
-                d.strategy_id,
-                date_to_text(d.signal_date),
-                d.trade_date.map(date_to_text),
-                d.mode.as_text(),
-                d.status,
-                d.inputs_json,
-                d.outputs_json,
-                time_to_text(d.created_at),
-            ],
-        );
-        match res {
-            Ok(_) => Ok(self.conn.last_insert_rowid()),
-            Err(e) if is_unique_violation(&e) => Err(StoreError::Duplicate(format!(
-                "decision for {} on {} in mode {}",
-                d.strategy_id,
-                date_to_text(d.signal_date),
-                d.mode.as_text()
-            ))),
-            Err(e) => Err(e.into()),
+        insert_decision_on(&self.conn, d)
+    }
+
+    /// Inserts a decision and its orders in one transaction and returns the
+    /// decision's id. Every order is stored with that id, whatever
+    /// `decision_id` it carries. Any failure, such as a repeated
+    /// `client_order_id` (`StoreError::Duplicate`), writes neither the decision
+    /// nor any order.
+    pub fn insert_decision_with_orders(
+        &self,
+        d: &DecisionRow,
+        orders: &[OrderRow],
+    ) -> Result<i64, StoreError> {
+        let tx = Transaction::new_unchecked(&self.conn, TransactionBehavior::Immediate)?;
+        let id = insert_decision_on(&tx, d)?;
+        for o in orders {
+            let o = OrderRow {
+                decision_id: Some(id),
+                ..o.clone()
+            };
+            insert_order_on(&tx, &o)?;
         }
+        tx.commit()?;
+        Ok(id)
     }
 
     /// The decision for a strategy, signal date and mode, if one is stored.
@@ -264,50 +266,7 @@ impl Store {
     /// transaction. A repeated `client_order_id` is `StoreError::Duplicate`.
     pub fn insert_order(&self, o: &OrderRow) -> Result<(), StoreError> {
         let tx = Transaction::new_unchecked(&self.conn, TransactionBehavior::Immediate)?;
-        // The creation event is stamped with the trade date at 00:00:00 UTC: library
-        // crates read no wall clock and this signature carries no time.
-        let created_at = o.trade_date.and_time(NaiveTime::MIN).and_utc();
-        let res = tx.execute(
-            "INSERT INTO orders (client_order_id, decision_id, symbol, side, qty, leg, state, \
-             broker_order_id, filled_qty, reference_price, trade_date) \
-             VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11)",
-            params![
-                o.client_order_id,
-                o.decision_id,
-                o.symbol.as_str(),
-                side_to_text(o.side),
-                to_i64(o.qty, "qty")?,
-                i64::from(o.leg),
-                state_to_text(o.state),
-                o.broker_order_id,
-                to_i64(o.filled_qty, "filled_qty")?,
-                dec_to_text(o.reference_price),
-                date_to_text(o.trade_date),
-            ],
-        );
-        match res {
-            Ok(_) => {}
-            Err(rusqlite::Error::SqliteFailure(f, _))
-                if f.extended_code == rusqlite::ffi::SQLITE_CONSTRAINT_PRIMARYKEY =>
-            {
-                return Err(StoreError::Duplicate(format!(
-                    "order {}",
-                    o.client_order_id
-                )));
-            }
-            Err(e) => return Err(e.into()),
-        }
-        tx.execute(
-            "INSERT INTO order_events (client_order_id, from_state, to_state, filled_qty, \
-             broker_order_id, at) VALUES (?1, NULL, ?2, ?3, ?4, ?5)",
-            params![
-                o.client_order_id,
-                state_to_text(o.state),
-                to_i64(o.filled_qty, "filled_qty")?,
-                o.broker_order_id,
-                time_to_text(created_at),
-            ],
-        )?;
+        insert_order_on(&tx, o)?;
         tx.commit()?;
         Ok(())
     }
@@ -316,7 +275,8 @@ impl Store {
     /// appends an `order_events` row, both in one transaction. A `None`
     /// `broker_order_id` keeps the stored one. An illegal transition is
     /// `StoreError::IllegalTransition` and writes nothing; an unknown id is
-    /// `StoreError::NotFound`.
+    /// `StoreError::NotFound`. A `filled_qty` above the order's qty or below the
+    /// stored one is `StoreError::Invalid` and writes nothing.
     pub fn set_order_state(
         &self,
         client_order_id: &str,
@@ -326,16 +286,18 @@ impl Store {
         at: DateTime<Utc>,
     ) -> Result<(), StoreError> {
         let tx = Transaction::new_unchecked(&self.conn, TransactionBehavior::Immediate)?;
-        let current: Option<(String, Option<String>)> = {
-            let mut stmt =
-                tx.prepare("SELECT state, broker_order_id FROM orders WHERE client_order_id = ?1")?;
+        let current: Option<(String, Option<String>, i64, i64)> = {
+            let mut stmt = tx.prepare(
+                "SELECT state, broker_order_id, qty, filled_qty FROM orders \
+                 WHERE client_order_id = ?1",
+            )?;
             let mut rows = stmt.query(params![client_order_id])?;
             match rows.next()? {
-                Some(r) => Some((r.get(0)?, r.get(1)?)),
+                Some(r) => Some((r.get(0)?, r.get(1)?, r.get(2)?, r.get(3)?)),
                 None => None,
             }
         };
-        let (from_text, stored_broker) =
+        let (from_text, stored_broker, order_qty, stored_filled) =
             current.ok_or_else(|| StoreError::NotFound(format!("order {client_order_id}")))?;
         let from = text_to_state(&from_text)?;
         if !transition_allowed(from, to) {
@@ -346,6 +308,16 @@ impl Store {
         }
         let broker = broker_order_id.map(str::to_string).or(stored_broker);
         let filled = to_i64(filled_qty, "filled_qty")?;
+        if filled > order_qty {
+            return Err(StoreError::Invalid(format!(
+                "filled_qty {filled} exceeds order qty {order_qty} for {client_order_id}"
+            )));
+        }
+        if filled < stored_filled {
+            return Err(StoreError::Invalid(format!(
+                "filled_qty {filled} is below the stored {stored_filled} for {client_order_id}"
+            )));
+        }
         tx.execute(
             "UPDATE orders SET state = ?1, filled_qty = ?2, broker_order_id = ?3 \
              WHERE client_order_id = ?4",
@@ -378,6 +350,34 @@ impl Store {
         }
     }
 
+    /// Mark an order as outside the paper ledger. Marking twice is fine.
+    /// `StoreError::NotFound` for an unknown id.
+    pub fn mark_off_ledger(&self, client_order_id: &str) -> Result<(), StoreError> {
+        let n = self.conn.execute(
+            "UPDATE orders SET off_ledger = 1 WHERE client_order_id = ?1",
+            params![client_order_id],
+        )?;
+        if n == 0 {
+            return Err(StoreError::NotFound(format!("order {client_order_id}")));
+        }
+        Ok(())
+    }
+
+    /// Whether the order is marked outside the paper ledger.
+    /// `StoreError::NotFound` for an unknown id.
+    pub fn is_off_ledger(&self, client_order_id: &str) -> Result<bool, StoreError> {
+        let flag: Option<i64> = self
+            .conn
+            .query_row(
+                "SELECT off_ledger FROM orders WHERE client_order_id = ?1",
+                params![client_order_id],
+                |r| r.get(0),
+            )
+            .optional()?;
+        flag.map(|f| f != 0)
+            .ok_or_else(|| StoreError::NotFound(format!("order {client_order_id}")))
+    }
+
     /// Orders whose state is one of `states`, in insertion order. Empty input gives empty output.
     pub fn orders_in_states(&self, states: &[OrderState]) -> Result<Vec<OrderRow>, StoreError> {
         if states.is_empty() {
@@ -396,22 +396,23 @@ impl Store {
     }
 
     /// Records a fill. Returns true when a row was inserted, false when the
-    /// activity id is already stored (the first row is kept).
+    /// activity id is already stored (the first row is kept). A collision on
+    /// any other unique index is an error.
     pub fn insert_fill(&self, f: &FillRow) -> Result<bool, StoreError> {
-        let n = self.conn.execute(
-            "INSERT OR IGNORE INTO fills (activity_id, broker_order_id, symbol, side, qty, \
-             price, at) VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7)",
-            params![
-                f.activity_id,
-                f.broker_order_id,
-                f.symbol.as_str(),
-                side_to_text(f.side),
-                to_i64(f.qty, "qty")?,
-                dec_to_text(f.price),
-                time_to_text(f.at),
-            ],
-        )?;
-        Ok(n == 1)
+        insert_fill_on(&self.conn, f)
+    }
+
+    /// Records a fill and its ledger entry in one transaction. Returns true
+    /// when both were written, false (and writes neither) when the activity id
+    /// is already stored. If the ledger insert fails, the fill is rolled back.
+    pub fn record_fill(&self, fill: &FillRow, entry: &LedgerEntry) -> Result<bool, StoreError> {
+        let tx = Transaction::new_unchecked(&self.conn, TransactionBehavior::Immediate)?;
+        if !insert_fill_on(&tx, fill)? {
+            return Ok(false);
+        }
+        append_ledger_on(&tx, entry)?;
+        tx.commit()?;
+        Ok(true)
     }
 
     /// All fills, in insertion order.
@@ -438,6 +439,99 @@ impl Store {
         }
         Ok(out)
     }
+}
+
+fn insert_decision_on(conn: &Connection, d: &DecisionRow) -> Result<i64, StoreError> {
+    let res = conn.execute(
+        "INSERT INTO decisions (strategy_id, signal_date, trade_date, mode, status, \
+         inputs_json, outputs_json, created_at) VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8)",
+        params![
+            d.strategy_id,
+            date_to_text(d.signal_date),
+            d.trade_date.map(date_to_text),
+            d.mode.as_text(),
+            d.status,
+            d.inputs_json,
+            d.outputs_json,
+            time_to_text(d.created_at),
+        ],
+    );
+    match res {
+        Ok(_) => Ok(conn.last_insert_rowid()),
+        Err(e) if is_unique_violation(&e) => Err(StoreError::Duplicate(format!(
+            "decision for {} on {} in mode {}",
+            d.strategy_id,
+            date_to_text(d.signal_date),
+            d.mode.as_text()
+        ))),
+        Err(e) => Err(e.into()),
+    }
+}
+
+fn insert_order_on(conn: &Connection, o: &OrderRow) -> Result<(), StoreError> {
+    // The creation event is stamped with the trade date at 00:00:00 UTC: library
+    // crates read no wall clock and this signature carries no time.
+    let created_at = o.trade_date.and_time(NaiveTime::MIN).and_utc();
+    let res = conn.execute(
+        "INSERT INTO orders (client_order_id, decision_id, symbol, side, qty, leg, state, \
+         broker_order_id, filled_qty, reference_price, trade_date) \
+         VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11)",
+        params![
+            o.client_order_id,
+            o.decision_id,
+            o.symbol.as_str(),
+            side_to_text(o.side),
+            to_i64(o.qty, "qty")?,
+            i64::from(o.leg),
+            state_to_text(o.state),
+            o.broker_order_id,
+            to_i64(o.filled_qty, "filled_qty")?,
+            dec_to_text(o.reference_price),
+            date_to_text(o.trade_date),
+        ],
+    );
+    match res {
+        Ok(_) => {}
+        Err(rusqlite::Error::SqliteFailure(f, _))
+            if f.extended_code == rusqlite::ffi::SQLITE_CONSTRAINT_PRIMARYKEY =>
+        {
+            return Err(StoreError::Duplicate(format!(
+                "order {}",
+                o.client_order_id
+            )));
+        }
+        Err(e) => return Err(e.into()),
+    }
+    conn.execute(
+        "INSERT INTO order_events (client_order_id, from_state, to_state, filled_qty, \
+         broker_order_id, at) VALUES (?1, NULL, ?2, ?3, ?4, ?5)",
+        params![
+            o.client_order_id,
+            state_to_text(o.state),
+            to_i64(o.filled_qty, "filled_qty")?,
+            o.broker_order_id,
+            time_to_text(created_at),
+        ],
+    )?;
+    Ok(())
+}
+
+fn insert_fill_on(conn: &Connection, f: &FillRow) -> Result<bool, StoreError> {
+    let n = conn.execute(
+        "INSERT INTO fills (activity_id, broker_order_id, symbol, side, qty, \
+         price, at) VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7) \
+         ON CONFLICT (activity_id) DO NOTHING",
+        params![
+            f.activity_id,
+            f.broker_order_id,
+            f.symbol.as_str(),
+            side_to_text(f.side),
+            to_i64(f.qty, "qty")?,
+            dec_to_text(f.price),
+            time_to_text(f.at),
+        ],
+    )?;
+    Ok(n == 1)
 }
 
 /// Which ledger an entry belongs to.
@@ -472,21 +566,7 @@ pub struct LedgerEntry {
 impl Store {
     /// Appends a ledger entry and returns its id. Ids increase with insertion.
     pub fn append_ledger(&self, e: &LedgerEntry) -> Result<i64, StoreError> {
-        self.conn.execute(
-            "INSERT INTO ledger_entries (book, date, kind, symbol, qty, price, cash_delta, \
-             ref_id) VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8)",
-            params![
-                e.book.as_text(),
-                date_to_text(e.date),
-                e.kind,
-                e.symbol.as_ref().map(Symbol::as_str),
-                e.qty,
-                e.price.map(dec_to_text),
-                dec_to_text(e.cash_delta),
-                e.ref_id,
-            ],
-        )?;
-        Ok(self.conn.last_insert_rowid())
+        append_ledger_on(&self.conn, e)
     }
 
     /// The entries of one book, in insertion order.
@@ -519,44 +599,63 @@ impl Store {
 
     /// Net quantity per symbol in a book; symbols with a net of zero are absent.
     pub fn positions(&self, book: Book) -> Result<Positions, StoreError> {
-        let mut out = Positions::new();
-        for e in self.ledger(book)? {
-            if let Some(s) = e.symbol {
-                *out.entry(s).or_insert(0) += e.qty;
-            }
-        }
-        out.retain(|_, q| *q != 0);
-        Ok(out)
+        Ok(self.fold_ledger(book, None)?.0)
     }
 
     /// The sum of the cash deltas in a book; zero when it has no entries.
     pub fn cash(&self, book: Book) -> Result<Decimal, StoreError> {
-        Ok(self
-            .ledger(book)?
-            .iter()
-            .fold(Decimal::ZERO, |acc, e| acc + e.cash_delta))
+        Ok(self.fold_ledger(book, None)?.1)
     }
 
     /// Net quantity per symbol using entries dated on or before `as_of`.
     pub fn positions_at(&self, book: Book, as_of: NaiveDate) -> Result<Positions, StoreError> {
-        let mut out = Positions::new();
-        for e in self.ledger(book)?.into_iter().filter(|e| e.date <= as_of) {
-            if let Some(s) = e.symbol {
-                *out.entry(s).or_insert(0) += e.qty;
-            }
-        }
-        out.retain(|_, q| *q != 0);
-        Ok(out)
+        Ok(self.fold_ledger(book, Some(as_of))?.0)
     }
 
     /// Cash using entries dated on or before `as_of`; zero when there are none.
     pub fn cash_at(&self, book: Book, as_of: NaiveDate) -> Result<Decimal, StoreError> {
-        Ok(self
-            .ledger(book)?
-            .iter()
-            .filter(|e| e.date <= as_of)
-            .fold(Decimal::ZERO, |acc, e| acc + e.cash_delta))
+        Ok(self.fold_ledger(book, Some(as_of))?.1)
     }
+
+    /// The one fold over a book's ledger: positions (zero nets dropped) and
+    /// cash, over entries dated on or before `as_of`, or all of them for `None`.
+    fn fold_ledger(
+        &self,
+        book: Book,
+        as_of: Option<NaiveDate>,
+    ) -> Result<(Positions, Decimal), StoreError> {
+        let mut positions = Positions::new();
+        let mut cash = Decimal::ZERO;
+        for e in self.ledger(book)? {
+            if as_of.is_some_and(|d| e.date > d) {
+                continue;
+            }
+            cash += e.cash_delta;
+            if let Some(s) = e.symbol {
+                *positions.entry(s).or_insert(0) += e.qty;
+            }
+        }
+        positions.retain(|_, q| *q != 0);
+        Ok((positions, cash))
+    }
+}
+
+fn append_ledger_on(conn: &Connection, e: &LedgerEntry) -> Result<i64, StoreError> {
+    conn.execute(
+        "INSERT INTO ledger_entries (book, date, kind, symbol, qty, price, cash_delta, \
+         ref_id) VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8)",
+        params![
+            e.book.as_text(),
+            date_to_text(e.date),
+            e.kind,
+            e.symbol.as_ref().map(Symbol::as_str),
+            e.qty,
+            e.price.map(dec_to_text),
+            dec_to_text(e.cash_delta),
+            e.ref_id,
+        ],
+    )?;
+    Ok(conn.last_insert_rowid())
 }
 
 /// One day's valuation of a book.
