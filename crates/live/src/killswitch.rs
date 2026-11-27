@@ -95,7 +95,7 @@ pub struct FlattenReport {
 /// already holds (an earlier flatten today) is adopted: the row is marked
 /// `Submitted` with the broker's id and the order is not sent again.
 ///
-/// A broker rejection marks that order `Rejected`, records an `order_rejected`
+/// A broker rejection (HTTP 403 or 422 only) marks that order `Rejected`, records an `order_rejected`
 /// alert and carries on with the remaining symbols, so one refused symbol
 /// never stops the rest from closing. The report counts the orders sent
 /// and accepted by this call and those rejected; working and adopted orders
@@ -218,8 +218,10 @@ pub fn flatten(ctx: &LiveContext) -> Result<FlattenReport, LiveError> {
         }
         let wire = match submit_order(ctx.http, permit, &order) {
             Ok(wire) => wire,
-            Err(AlpacaError::Rejected { status, message }) => {
+            Err(AlpacaError::Rejected { status, message }) if matches!(status, 403 | 422) => {
                 // The broker refused this one: record it and close the rest.
+                // Any other status (401, 429, 5xx) is not a refusal of the order
+                // and falls through to stop the call (R-489).
                 let now = ctx.clock.now_utc();
                 ctx.store.set_order_state(
                     &order.client_order_id,
