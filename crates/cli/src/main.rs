@@ -7,6 +7,7 @@ mod cmd_data;
 mod cmd_ops;
 mod cmd_run;
 mod cmd_validate;
+mod strategies;
 mod wiring;
 
 use std::process::ExitCode;

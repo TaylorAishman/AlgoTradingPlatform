@@ -5,7 +5,6 @@ use std::sync::Arc;
 
 use anyhow::Context;
 use chrono::Utc;
-use pt_calendar::calendar::TradingCalendar;
 use pt_core::clock::SystemClock;
 use pt_core::types::Symbol;
 use pt_gate::gate::Gate;
@@ -19,6 +18,7 @@ use pt_store::error::StoreError;
 use pt_strategy::tsmom::{Tsmom, TsmomParams};
 
 use crate::cli::{ConfirmArgs, HaltCmd, SignoffCmd};
+use crate::strategies::StoredTsmom;
 use crate::wiring;
 
 /// Inspect or change halts. No stage is required and no request is made.
@@ -104,15 +104,12 @@ fn kill_switch(
     );
     let gate = Gate::new(owner);
     // The kill switch only needs the strategy's id; the calendar is unused.
-    let placeholder = TradingCalendar::new(vec![cfg.data.start]).context("strategy calendar")?;
-    let strategy = Tsmom::new(
-        TsmomParams {
-            lookback_months: cfg.strategy.lookback_months.clone(),
-            risk_free_symbol: Symbol::new(&cfg.strategy.risk_free_symbol)
-                .context("strategy.risk_free_symbol")?,
-        },
-        Arc::new(placeholder),
-    );
+    let params = TsmomParams {
+        lookback_months: cfg.strategy.lookback_months.clone(),
+        risk_free_symbol: Symbol::new(&cfg.strategy.risk_free_symbol)
+            .context("strategy.risk_free_symbol")?,
+    };
+    let strategy = StoredTsmom::new(&store, params, cfg.data.start)?;
     let clock = SystemClock;
     let ctx = LiveContext {
         store: &store,

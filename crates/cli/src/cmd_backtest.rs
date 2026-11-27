@@ -37,8 +37,8 @@ fn date(label: &str, text: &str) -> anyhow::Result<NaiveDate> {
 /// The trial-registry family a strategy name records under.
 fn family(strategy: &str) -> &str {
     match strategy {
-        "tsmom" => "tsmom-v1",
-        "benchmark" => "bh-volscaled-v1",
+        "tsmom" => pt_strategy::tsmom::ID,
+        "benchmark" => pt_strategy::benchmark::ID,
         other => other,
     }
 }
