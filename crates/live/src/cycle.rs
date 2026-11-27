@@ -14,7 +14,8 @@ use pt_ops::alert::Level;
 use crate::context::LiveContext;
 use crate::error::LiveError;
 use crate::first_order::{
-    first_order, first_order_accepted, plan_first_order_retry, RETRY_WAITS_SECS,
+    approval_differs_from_accepted, first_order, first_order_accepted, first_order_attempt_base,
+    plan_first_order_retry, RETRY_WAITS_SECS,
 };
 use crate::rebalance::{rebalance, RebalanceOutcome};
 use crate::reconcile::reconcile;
@@ -187,7 +188,22 @@ fn first_order_phases(
 
     // Read before planning, so the order planned by this run is not counted.
     let already_sent = first_order_accepted(ctx.store)?;
-    first_order(ctx, wire_clock)?;
+    if already_sent {
+        // R-500: once an order is accepted, a different approval is ignored.
+        if approval_differs_from_accepted(ctx)? {
+            ctx.alerter.alert(
+                ctx.store,
+                Level::Warn,
+                "first_order_ignored",
+                "the first order was already accepted; the edited approval is ignored",
+                None,
+                ctx.clock.now_utc(),
+            );
+        }
+    } else {
+        first_order(ctx, wire_clock)?;
+    }
+    let attempt_base = first_order_attempt_base(ctx, wire_clock)?;
     phases.push("first_order".to_string());
 
     let auth = AuthContext {
@@ -207,7 +223,7 @@ fn first_order_phases(
             break;
         }
         ctx.http.sleep(std::time::Duration::from_secs(*wait));
-        if !plan_first_order_retry(ctx, wire_clock, i as u32 + 1)? {
+        if !plan_first_order_retry(ctx, wire_clock, attempt_base + i as u32 + 1)? {
             retried_all = false;
             break;
         }

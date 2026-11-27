@@ -33,8 +33,16 @@ pub fn first_order(ctx: &LiveContext, wire_clock: &WireClock) -> Result<bool, Li
     };
     let symbol = Symbol::new(&approval.symbol)
         .map_err(|e| LiveError::Invalid(format!("symbol \"{}\": {e}", approval.symbol)))?;
+    // R-499: an approval edited after its attempts died gets a new attempt
+    // numbered after the stored ones; an unchanged one adds nothing.
+    let stored = stored_attempts(ctx, approval.valid_on, &approval.symbol)?;
+    let client_order_id = match stored.last() {
+        None => first_order_id(approval.valid_on, &approval.symbol),
+        Some(last) if last.side == side && last.qty == approval.qty => return Ok(true),
+        Some(_) => first_order_retry_id(approval.valid_on, &approval.symbol, stored.len() as u32),
+    };
     let res = ctx.store.insert_order(&OrderRow {
-        client_order_id: first_order_id(approval.valid_on, &approval.symbol),
+        client_order_id,
         decision_id: None,
         symbol,
         side,
@@ -123,4 +131,65 @@ pub fn first_order_accepted(store: &Store) -> Result<bool, LiveError> {
     Ok(accepted
         .iter()
         .any(|o| o.client_order_id.starts_with("pt-first-")))
+}
+
+/// The stored attempts of the approval for `symbol` on `valid_on`, in order:
+/// the first id, then `-r1`, `-r2` and so on until the first gap.
+fn stored_attempts(
+    ctx: &LiveContext,
+    valid_on: chrono::NaiveDate,
+    symbol: &str,
+) -> Result<Vec<OrderRow>, LiveError> {
+    let mut rows = Vec::new();
+    while let Some(row) = ctx.store.order(&if rows.is_empty() {
+        first_order_id(valid_on, symbol)
+    } else {
+        first_order_retry_id(valid_on, symbol, rows.len() as u32)
+    })? {
+        rows.push(row);
+    }
+    Ok(rows)
+}
+
+/// The number of retries already stored for today's approval: the attempt
+/// number of its latest order. New retries are numbered after it (R-499).
+pub fn first_order_attempt_base(
+    ctx: &LiveContext,
+    wire_clock: &WireClock,
+) -> Result<u32, LiveError> {
+    let Some(approval) = ctx.gate.first_order() else {
+        return Ok(0);
+    };
+    if approval.valid_on != trade_session(wire_clock) {
+        return Ok(0);
+    }
+    let n = stored_attempts(ctx, approval.valid_on, &approval.symbol)?.len();
+    Ok(n.saturating_sub(1) as u32)
+}
+
+/// Whether today's approval differs from the first order the broker accepted
+/// (R-500): a different symbol, side or quantity.
+pub fn approval_differs_from_accepted(ctx: &LiveContext) -> Result<bool, LiveError> {
+    let Some(approval) = ctx.gate.first_order() else {
+        return Ok(false);
+    };
+    let accepted = ctx.store.orders_in_states(&[
+        OrderState::Submitted,
+        OrderState::PartiallyFilled,
+        OrderState::Filled,
+        OrderState::Canceled,
+        OrderState::Expired,
+    ])?;
+    let Some(row) = accepted
+        .iter()
+        .find(|o| o.client_order_id.starts_with("pt-first-"))
+    else {
+        return Ok(false);
+    };
+    let side = match approval.side.as_str() {
+        "buy" => Side::Buy,
+        "sell" => Side::Sell,
+        _ => return Ok(true),
+    };
+    Ok(row.symbol.as_str() != approval.symbol || row.side != side || row.qty != approval.qty)
 }
