@@ -8,7 +8,7 @@ use pt_alpaca::orders_write::{cancel_order, submit_order, NewOrder};
 use pt_alpaca::reference;
 use pt_core::order_state::OrderState;
 use pt_core::types::{Side, Symbol};
-use pt_gate::gate::{AuthContext, Capability, OrderSummary};
+use pt_gate::gate::{Capability, OrderSummary};
 use pt_ops::alert::Level;
 use pt_store::trading::OrderRow;
 use rust_decimal::Decimal;
@@ -67,11 +67,11 @@ pub struct FlattenReport {
 /// Closes every position the broker holds with one market day order per
 /// symbol, in symbol order, and returns a [`FlattenReport`].
 ///
-/// Only the stage is checked up front, so an active halt does not stop this.
-/// A `flattened` halt is set (unless one is already active) before any order
+/// Works in every stage, with no flat confirmation or allowlist, and an active
+/// halt does not stop it. A `flattened` halt is set (unless one is already active) before any order
 /// is authorised or sent, so the system stays halted even if the gate refuses
-/// an order or sending fails part way. Each order is authorised by the gate as
-/// risk-reducing, stored with client order id `pt-flatten-<yyyymmdd>-<symbol>`
+/// an order or sending fails part way. Each order is authorised by the gate's
+/// kill-switch rule (`authorize_kill_switch`), stored with client order id `pt-flatten-<yyyymmdd>-<symbol>`
 /// so [`crate::settle::settle`] records its fills, and is sent only if the
 /// broker does not already hold that id. A stored flatten order carries no
 /// decision and a zero reference price: no plan priced it.
@@ -95,7 +95,6 @@ pub struct FlattenReport {
 /// cancelled order's stored row stays `Submitted` until settle, and `flatten`
 /// skips a symbol whose row is `Submitted`.
 pub fn flatten(ctx: &LiveContext) -> Result<FlattenReport, LiveError> {
-    ctx.gate.allows(Capability::SubmitOrder)?;
     if !ctx
         .store
         .active_halts()?
@@ -112,14 +111,6 @@ pub fn flatten(ctx: &LiveContext) -> Result<FlattenReport, LiveError> {
     let mut held = positions(ctx.http)?;
     held.retain(|p| p.qty != 0);
     held.sort_by(|a, b| a.symbol.cmp(&b.symbol));
-    let auth = AuthContext {
-        strategy_id: ctx.strategy.id().to_string(),
-        today,
-        halted: true,
-        risk_reducing: true,
-        is_first_order: false,
-        first_order_already_sent: false,
-    };
     let mut placed = 0;
     let mut rejected = 0;
     for p in held {
@@ -153,14 +144,14 @@ pub fn flatten(ctx: &LiveContext) -> Result<FlattenReport, LiveError> {
             .to_string(),
             qty: p.qty.unsigned_abs(),
         };
-        let permit = ctx.gate.authorize(
+        let permit = ctx.gate.authorize_kill_switch(
             &OrderSummary {
                 client_order_id: order.client_order_id.clone(),
                 symbol: order.symbol.clone(),
                 side: order.side.clone(),
                 qty: order.qty,
             },
-            &auth,
+            p.qty,
         )?;
         if stored.is_none() {
             let symbol = Symbol::new(&p.symbol)
