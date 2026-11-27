@@ -84,3 +84,46 @@ fn validate_dsr_for_an_unknown_run_exits_one() {
     assert_eq!(out.status.code(), Some(1), "stdout: {}", stdout(&out));
     assert!(stderr(&out).contains("99"), "stderr: {}", stderr(&out));
 }
+
+fn backtest_strategy(e: &Env, strategy: &str) {
+    let out = run(
+        e,
+        &[
+            "backtest",
+            "run",
+            "--strategy",
+            strategy,
+            "--from",
+            "2024-04-01",
+            "--to",
+            "2024-12-30",
+        ],
+    );
+    assert_eq!(out.status.code(), Some(0), "stderr: {}", stderr(&out));
+}
+
+#[test]
+fn validate_dsr_counts_only_the_trials_of_the_runs_own_family() {
+    // R-548: tsmom (1), tsmom with another lookback (2), benchmark (3)
+    let e = env();
+    backtest_strategy(&e, "tsmom");
+    set_lookback(&e, 2);
+    backtest_strategy(&e, "tsmom");
+    backtest_strategy(&e, "benchmark");
+
+    let out = run(&e, &["validate", "dsr", "--run", "3"]);
+    assert_eq!(out.status.code(), Some(0), "stderr: {}", stderr(&out));
+    assert!(
+        has_pair(&tokens(&out), "trials", "1"),
+        "no `trials 1` for the benchmark run in: {}",
+        stdout(&out)
+    );
+
+    let out = run(&e, &["validate", "dsr", "--run", "1"]);
+    assert_eq!(out.status.code(), Some(0), "stderr: {}", stderr(&out));
+    assert!(
+        has_pair(&tokens(&out), "trials", "2"),
+        "no `trials 2` for the tsmom run in: {}",
+        stdout(&out)
+    );
+}
