@@ -19,3 +19,9 @@ pub fn client_order_id(strategy_id: &str, signal_date: NaiveDate, symbol: &str, 
 pub fn first_order_id(valid_on: NaiveDate, symbol: &str) -> String {
     format!("pt-first-{}-{symbol}", valid_on.format("%Y%m%d"))
 }
+
+/// Identifier of the `attempt`th retry of the approved first order:
+/// `pt-first-<valid_on yyyymmdd>-<symbol>-r<attempt>`, attempt counting from 1.
+pub fn first_order_retry_id(valid_on: NaiveDate, symbol: &str, attempt: u32) -> String {
+    format!("{}-r{attempt}", first_order_id(valid_on, symbol))
+}
