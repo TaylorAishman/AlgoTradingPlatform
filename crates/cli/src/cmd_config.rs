@@ -66,7 +66,8 @@ fn store_facts() -> (bool, bool, bool) {
 /// bars count when the configured store holds them, and the first order counts
 /// when the store holds an accepted one.
 pub fn gates() -> anyhow::Result<i32> {
-    let owner = wiring::load_owner()?;
+    let mut owner = wiring::load_owner()?;
+    owner.alert_webhook_url = wiring::alert_webhook(owner.alert_webhook_url.take());
     let keys_present = wiring::load_keys().is_ok();
     let (calendar_loaded, bars_loaded, first_order_sent) = store_facts();
     let facts = Facts {
