@@ -118,3 +118,9 @@ on 2026-11-26": G-53, G-92, G-55, G-56, G-54, G-94, G-05, G-60.
   continue each component's numbering.
 - All tests use fake keys, the mock broker and loopback only; no secrets file
   is read.
+
+## Revision 2026-11-27: R-512 date (owner)
+
+- Question: R-512's acceptance check named TLT's bar for 2024-02-29, which is the signal date in the late setup; readiness is checked on the reference date (2024-03-06), the behaviour the owner accepted as G-58. Correct the requirement, or change the code?
+- Answer: correct R-512 to the reference date, 2024-03-06. O74 stays a test-only pin (Arch F-21).
+- New gap for a later design (not in this design's scope): in a late rebalance, a missing bar on the signal date is not caught by the readiness check. The strategy then treats that symbol as ineligible and the decision goes ahead without it. For a late first paper rebalance this can plan real orders with the symbol left out. On-time rebalances are not affected.
