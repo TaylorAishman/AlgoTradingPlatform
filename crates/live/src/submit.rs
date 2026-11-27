@@ -50,7 +50,13 @@ pub fn submit_planned(ctx: &LiveContext, auth: &AuthContext) -> Result<SubmitRep
         if oldest_live.is_none() {
             let clock = pt_alpaca::reference::clock(ctx.http)?;
             let calendar = ctx.store.calendar()?;
-            oldest_live = Some(expected_last_session(&clock, &calendar).unwrap_or(NaiveDate::MIN));
+            let oldest = expected_last_session(&clock, &calendar).ok_or_else(|| {
+                LiveError::Invalid(
+                    "no session precedes the trade session: cannot judge the staleness of an intent"
+                        .to_string(),
+                )
+            })?;
+            oldest_live = Some(oldest);
         }
         if oldest_live.is_some_and(|oldest| row.trade_date < oldest) {
             // Its session has passed: never send it (R-285).
