@@ -8,26 +8,26 @@
     <array>
         <string>/usr/local/bin/trader</string>
         <string>run</string>
+        <string>--if-due</string>
     </array>
+    <!-- Fires every fifteen minutes; `run --if-due` decides whether a run is due, using America/New_York market time. -->
     <key>StartCalendarInterval</key>
     <array>
         <dict>
-            <key>Hour</key>
-            <integer>8</integer>
             <key>Minute</key>
             <integer>0</integer>
         </dict>
         <dict>
-            <key>Hour</key>
-            <integer>9</integer>
             <key>Minute</key>
-            <integer>45</integer>
+            <integer>15</integer>
         </dict>
         <dict>
-            <key>Hour</key>
-            <integer>17</integer>
             <key>Minute</key>
             <integer>30</integer>
+        </dict>
+        <dict>
+            <key>Minute</key>
+            <integer>45</integer>
         </dict>
     </array>
     <key>StandardErrorPath</key>
