@@ -10,12 +10,12 @@ use chrono::{NaiveTime, TimeZone, Utc};
 use pt_alpaca::activities::{fill_activities, WireFill};
 use pt_alpaca::orders_read::order_by_client_id;
 use pt_core::order_state::OrderState;
-use pt_ops::alert::Level;
 use pt_store::trading::{Book, FillRow, LedgerEntry, OrderRow};
 use rust_decimal::Decimal;
 
 use crate::context::LiveContext;
 use crate::error::LiveError;
+use crate::halts::set_halt;
 use crate::status::map_status;
 
 /// What one call of [`settle`] did.
@@ -120,23 +120,11 @@ pub fn settle(ctx: &LiveContext) -> Result<SettleReport, LiveError> {
 /// `halt_set` alert, unless one is already active. The order is left as it is.
 fn halt_unexpected(ctx: &LiveContext, row: &OrderRow, status: &str) -> Result<(), LiveError> {
     const REASON: &str = "unexpected_order_status";
-    if ctx.store.active_halts()?.iter().any(|h| h.reason == REASON) {
-        return Ok(());
-    }
     let detail = format!(
         "order {} reported status {status}, which the design never causes",
         row.client_order_id
     );
-    let now = ctx.clock.now_utc();
-    ctx.store.set_halt(REASON, &detail, now)?;
-    ctx.alerter.alert(
-        ctx.store,
-        Level::Critical,
-        "halt_set",
-        &format!("halt {REASON}: {detail}"),
-        None,
-        now,
-    );
+    set_halt(ctx, REASON, &detail)?;
     Ok(())
 }
 
