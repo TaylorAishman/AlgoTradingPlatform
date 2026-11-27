@@ -67,13 +67,22 @@ pub fn settle(ctx: &LiveContext) -> Result<SettleReport, LiveError> {
             }
             Err(e) => return Err(e),
         };
-        for fill in activities.iter().filter(|f| f.order_id == wire.id) {
-            if record_fill(ctx, &row, fill)? {
-                report.fills_recorded += 1;
-                *stored.entry(fill.order_id.clone()).or_default() += fill.qty;
+        // An off-ledger order keeps its fills and ledger entries out of the
+        // books; the broker's own figures stand in for the stored fills.
+        let off_ledger = ctx.store.is_off_ledger(&row.client_order_id)?;
+        if !off_ledger {
+            for fill in activities.iter().filter(|f| f.order_id == wire.id) {
+                if record_fill(ctx, &row, fill)? {
+                    report.fills_recorded += 1;
+                    *stored.entry(fill.order_id.clone()).or_default() += fill.qty;
+                }
             }
         }
-        let stored_qty = stored.get(&wire.id).copied().unwrap_or(0);
+        let stored_qty = if off_ledger {
+            u64::MAX
+        } else {
+            stored.get(&wire.id).copied().unwrap_or(0)
+        };
         let (state, filled_qty) = supported(broker_state, wire.filled_qty, row.qty, stored_qty);
         if state == row.state && filled_qty == row.filled_qty {
             continue;
