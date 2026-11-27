@@ -5,7 +5,9 @@ use std::path::Path;
 use anyhow::Context;
 use chrono::NaiveDate;
 use clap::Subcommand;
+use pt_config::config::Config;
 use pt_core::clock::SystemClock;
+use pt_gate::owner::Stage;
 use pt_store::db::Store;
 use pt_validate::crosscheck::crosscheck as run_crosscheck;
 use pt_validate::error::ValidateError;
@@ -71,6 +73,34 @@ fn family(strategy: &str) -> &str {
     }
 }
 
+/// The capital when no flag is given: the account's equity when keys are set
+/// and the stage is `ingest` or later, else the configured capital. A failed
+/// account read warns and falls back; the backtest stage makes no request.
+fn config_or_account_capital(cfg: &Config) -> anyhow::Result<(Decimal, CapitalSource)> {
+    let fallback = (cfg.backtest.initial_capital, CapitalSource::Config);
+    if wiring::load_keys().is_err() {
+        return Ok(fallback);
+    }
+    if wiring::load_owner()?.stage < Stage::Ingest {
+        wiring::log(
+            "info",
+            "stage is backtest: using the configured capital, no account request",
+        );
+        return Ok(fallback);
+    }
+    let read = wiring::build_client().and_then(|http| Ok(pt_alpaca::account::account(&http)?));
+    match read {
+        Ok(a) => Ok((a.equity, CapitalSource::Account)),
+        Err(e) => {
+            wiring::log(
+                "warn",
+                &format!("account read failed, using the configured capital: {e}"),
+            );
+            Ok(fallback)
+        }
+    }
+}
+
 fn run(
     from: &str,
     to: &str,
@@ -84,7 +114,7 @@ fn run(
             return Ok(1);
         }
         Some(c) => (c, CapitalSource::Flag),
-        None => (cfg.backtest.initial_capital, CapitalSource::Config),
+        None => config_or_account_capital(&cfg)?,
     };
     let req = BacktestRequest {
         strategy: strategy.unwrap_or("tsmom").to_string(),
