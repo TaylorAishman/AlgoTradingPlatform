@@ -43,40 +43,35 @@ fn cron_entries(text: &str) -> Vec<Vec<String>> {
 
 // R-400
 #[test]
-fn cron_example_sets_new_york_timezone() {
+fn cron_example_has_no_cron_tz_line() {
     let text = deploy_file("cron.example");
     assert!(
-        text.lines().any(|l| l.trim() == "CRON_TZ=America/New_York"),
-        "missing CRON_TZ=America/New_York line"
+        !text.lines().any(|l| l.trim_start().starts_with("CRON_TZ")),
+        "cron.example must not set CRON_TZ"
     );
 }
 
 // R-400
 #[test]
-fn cron_example_has_three_weekday_entries_at_0800_0945_and_1730() {
+fn cron_example_has_one_entry_every_fifteen_minutes_running_if_due() {
     let text = deploy_file("cron.example");
     let entries = cron_entries(&text);
-    assert_eq!(
-        entries.len(),
-        3,
-        "expected three trader run entries: {entries:?}"
-    );
-    let mut times: Vec<(u32, u32)> = Vec::new();
-    for e in &entries {
-        assert!(e.len() >= 7, "entry too short: {e:?}");
-        assert_eq!(e[2], "*", "day of month must be *: {e:?}");
-        assert_eq!(e[3], "*", "month must be *: {e:?}");
-        let dow = e[4].to_uppercase();
-        assert!(
-            ["1-5", "1,2,3,4,5", "MON-FRI", "MON,TUE,WED,THU,FRI"].contains(&dow.as_str()),
-            "entry is not weekday-only: {e:?}"
-        );
-        let hour: u32 = e[1].parse().expect("hour is a plain number");
-        let minute: u32 = e[0].parse().expect("minute is a plain number");
-        times.push((hour, minute));
-    }
-    times.sort();
-    assert_eq!(times, vec![(8, 0), (9, 45), (17, 30)]);
+    assert_eq!(entries.len(), 1, "expected one schedule entry: {entries:?}");
+    let e = &entries[0];
+    assert!(e.len() >= 7, "entry too short: {e:?}");
+    assert_eq!(&e[..5], ["*/15", "*", "*", "*", "*"], "time fields: {e:?}");
+    let pos = e
+        .iter()
+        .position(|w| w.rsplit('/').next() == Some("trader"))
+        .expect("no trader command");
+    assert_eq!(e[pos + 1], "run", "entry: {e:?}");
+    assert_eq!(e[pos + 2], "--if-due", "entry: {e:?}");
+}
+
+// R-400
+#[test]
+fn cron_example_names_new_york_time() {
+    assert!(deploy_file("cron.example").contains("America/New_York"));
 }
 
 // R-400
@@ -170,11 +165,21 @@ fn launchd_example_runs_trader_run() {
         "no trader program argument: {args:?}"
     );
     assert!(args.contains(&"run"), "no run program argument: {args:?}");
+    assert!(
+        args.contains(&"--if-due"),
+        "no --if-due program argument: {args:?}"
+    );
 }
 
 // R-400
 #[test]
-fn launchd_example_has_three_start_calendar_intervals() {
+fn launchd_example_names_new_york_time() {
+    assert!(deploy_file(PLIST).contains("America/New_York"));
+}
+
+// R-400
+#[test]
+fn launchd_example_has_four_quarter_hour_intervals_without_hour() {
     let text = deploy_file(PLIST);
     let start = text
         .find("<key>StartCalendarInterval</key>")
@@ -189,11 +194,23 @@ fn launchd_example_has_three_start_calendar_intervals() {
     let block = &after[arr_start..arr_end];
     assert_eq!(
         block.matches("<dict>").count(),
-        3,
-        "expected three intervals"
+        4,
+        "expected four intervals"
     );
-    assert_eq!(block.matches("<key>Hour</key>").count(), 3);
-    assert_eq!(block.matches("<key>Minute</key>").count(), 3);
+    assert_eq!(block.matches("<key>Hour</key>").count(), 0, "Hour is set");
+    let mut minutes: Vec<u32> = block
+        .split("<key>Minute</key>")
+        .skip(1)
+        .map(|s| {
+            s.split("<integer>")
+                .nth(1)
+                .and_then(|t| t.split("</integer>").next())
+                .and_then(|t| t.trim().parse().ok())
+                .expect("Minute has an integer value")
+        })
+        .collect();
+    minutes.sort();
+    assert_eq!(minutes, vec![0, 15, 30, 45]);
 }
 
 // R-400
