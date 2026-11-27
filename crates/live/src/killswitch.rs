@@ -8,9 +8,9 @@ use pt_alpaca::orders_write::{cancel_order, submit_order, NewOrder};
 use pt_alpaca::reference;
 use pt_core::order_state::OrderState;
 use pt_core::types::{Side, Symbol};
-use pt_gate::gate::{AuthContext, Capability, OrderSummary};
+use pt_gate::gate::{Capability, OrderSummary};
 use pt_ops::alert::Level;
-use pt_store::trading::OrderRow;
+use pt_store::trading::{Book, OrderRow};
 use rust_decimal::Decimal;
 
 use crate::context::LiveContext;
@@ -29,10 +29,19 @@ use crate::snapshot::trade_session;
 /// skipped, not counted, and the rest are still cancelled. Any other error
 /// stops the call.
 pub fn cancel_open(ctx: &LiveContext) -> Result<usize, LiveError> {
+    cancel_matching(ctx, false)
+}
+
+/// Cancels the open orders, leaving working flatten orders alone when
+/// `keep_flatten` is set: they are the closing orders themselves.
+fn cancel_matching(ctx: &LiveContext, keep_flatten: bool) -> Result<usize, LiveError> {
     ctx.gate.allows(Capability::CancelOrder)?;
     let open = [OrderState::Submitted, OrderState::PartiallyFilled];
     let mut cancelled = 0;
     for row in ctx.store.orders_in_states(&open)? {
+        if keep_flatten && row.client_order_id.starts_with("pt-flatten-") {
+            continue;
+        }
         let broker_id = match row.broker_order_id {
             Some(id) => id,
             None => match order_by_client_id(ctx.http, &row.client_order_id)? {
@@ -52,38 +61,53 @@ pub fn cancel_open(ctx: &LiveContext) -> Result<usize, LiveError> {
     Ok(cancelled)
 }
 
+/// What [`flatten`] did: orders cancelled, orders the broker accepted and
+/// orders the broker rejected. Adopted and already-working orders count in none.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
+pub struct FlattenReport {
+    /// Open orders cancelled before closing.
+    pub cancelled: usize,
+    /// Orders sent and accepted by the broker.
+    pub accepted: usize,
+    /// Orders the broker rejected.
+    pub rejected: usize,
+}
+
 /// Closes every position the broker holds with one market day order per
-/// symbol, in symbol order, and returns how many orders were sent.
+/// symbol, in symbol order, and returns a [`FlattenReport`].
 ///
-/// Only the stage is checked up front, so an active halt does not stop this.
-/// A `flattened` halt is set (unless one is already active) before any order
+/// Works in every stage, with no flat confirmation or allowlist, and an active
+/// halt does not stop it. A `flattened` halt is set (unless one is already active) before any order
 /// is authorised or sent, so the system stays halted even if the gate refuses
-/// an order or sending fails part way. Each order is authorised by the gate as
-/// risk-reducing, stored with client order id `pt-flatten-<yyyymmdd>-<symbol>`
+/// an order or sending fails part way. Each order is authorised by the gate's
+/// kill-switch rule (`authorize_kill_switch`), stored with client order id `pt-flatten-<yyyymmdd>-<symbol>`
 /// so [`crate::settle::settle`] records its fills, and is sent only if the
 /// broker does not already hold that id. A stored flatten order carries no
 /// decision and a zero reference price: no plan priced it.
 ///
 /// The stored row for that id decides what happens. A `Submitted` or
 /// `PartiallyFilled` row is still working at the broker, so nothing is sent.
-/// A row in any other state but `Intent` (rejected, filled, cancelled, ...) is
+/// A `Rejected` row whose order the broker nevertheless kept is adopted: the
+/// row becomes `Submitted` with the broker's id, nothing is sent and it counts
+/// as accepted. A row in any other state but `Intent` (filled, cancelled, ...) is
 /// spent, so a retry uses the next free id `<id>-r1`, `<id>-r2`, ... and never
 /// reuses a spent one. With no row or an `Intent` row, an order the broker
 /// already holds (an earlier flatten today) is adopted: the row is marked
 /// `Submitted` with the broker's id and the order is not sent again.
 ///
-/// A broker rejection marks that order `Rejected`, records an `order_rejected`
+/// A broker rejection (HTTP 403 or 422 only) marks that order `Rejected`, records an `order_rejected`
 /// alert and carries on with the remaining symbols, so one refused symbol
-/// never stops the rest from closing. The returned count is the orders sent
-/// and accepted by this call; working, adopted and rejected orders are not
-/// counted, and a partial failure is reported only through its alert. A gate
+/// never stops the rest from closing. The report counts the orders sent
+/// and accepted by this call and those rejected; working and adopted orders
+/// are in neither, and a partial failure is reported only through its alert. A gate
 /// refusal or any other error stops the call.
 ///
-/// After [`cancel_open`], run [`crate::settle::settle`] before `flatten`: a
-/// cancelled order's stored row stays `Submitted` until settle, and `flatten`
-/// skips a symbol whose row is `Submitted`.
-pub fn flatten(ctx: &LiveContext) -> Result<usize, LiveError> {
-    ctx.gate.allows(Capability::SubmitOrder)?;
+/// A flatten order stored while the paper ledger is empty is marked off-ledger.
+///
+/// Once the halt is set, `flatten` cancels every open order except its own working flatten orders ([`cancel_open`]),
+/// then settles ([`crate::settle::settle`]) so cancelled orders and their
+/// partial fills are stored, and only then reads the positions to close.
+pub fn flatten(ctx: &LiveContext) -> Result<FlattenReport, LiveError> {
     if !ctx
         .store
         .active_halts()?
@@ -96,33 +120,50 @@ pub fn flatten(ctx: &LiveContext) -> Result<usize, LiveError> {
             ctx.clock.now_utc(),
         )?;
     }
+    let cancelled = cancel_matching(ctx, true)?;
+    crate::settle::settle(ctx)?;
     let today = trade_session(&reference::clock(ctx.http)?);
     let mut held = positions(ctx.http)?;
     held.retain(|p| p.qty != 0);
     held.sort_by(|a, b| a.symbol.cmp(&b.symbol));
-    let auth = AuthContext {
-        strategy_id: ctx.strategy.id().to_string(),
-        today,
-        halted: true,
-        risk_reducing: true,
-        is_first_order: false,
-        first_order_already_sent: false,
-    };
     let mut placed = 0;
+    let mut rejected = 0;
     for p in held {
         let base = flatten_order_id(today, &p.symbol);
         let (mut client_order_id, mut retry) = (base.clone(), 0);
+        let mut adopted = false;
         let stored = loop {
             let row = ctx.store.order(&client_order_id)?;
             match row.as_ref().map(|r| r.state) {
                 None | Some(OrderState::Intent) => break row,
                 Some(OrderState::Submitted | OrderState::PartiallyFilled) => break row,
+                Some(OrderState::Rejected) => {
+                    // The broker may have kept the order it answered with a
+                    // reject: adopt it rather than send a second one.
+                    if let Some(held) = order_by_client_id(ctx.http, &client_order_id)? {
+                        ctx.store.set_order_state(
+                            &client_order_id,
+                            OrderState::Submitted,
+                            0,
+                            Some(&held.id),
+                            ctx.clock.now_utc(),
+                        )?;
+                        adopted = true;
+                        break row;
+                    }
+                    retry += 1;
+                    client_order_id = format!("{base}-r{retry}");
+                }
                 Some(_) => {
                     retry += 1;
                     client_order_id = format!("{base}-r{retry}");
                 }
             }
         };
+        if adopted {
+            placed += 1;
+            continue;
+        }
         if stored
             .as_ref()
             .is_some_and(|r| r.state != OrderState::Intent)
@@ -140,14 +181,14 @@ pub fn flatten(ctx: &LiveContext) -> Result<usize, LiveError> {
             .to_string(),
             qty: p.qty.unsigned_abs(),
         };
-        let permit = ctx.gate.authorize(
+        let permit = ctx.gate.authorize_kill_switch(
             &OrderSummary {
                 client_order_id: order.client_order_id.clone(),
                 symbol: order.symbol.clone(),
                 side: order.side.clone(),
                 qty: order.qty,
             },
-            &auth,
+            p.qty,
         )?;
         if stored.is_none() {
             let symbol = Symbol::new(&p.symbol)
@@ -165,6 +206,11 @@ pub fn flatten(ctx: &LiveContext) -> Result<usize, LiveError> {
                 reference_price: Decimal::ZERO,
                 trade_date: today,
             })?;
+            // Before the opening balance exists the paper book does not hold
+            // this position, so its closing fill must stay off the ledger.
+            if ctx.store.ledger(Book::Paper)?.is_empty() {
+                ctx.store.mark_off_ledger(&order.client_order_id)?;
+            }
         }
         if let Some(held) = order_by_client_id(ctx.http, &order.client_order_id)? {
             // Already sent by an earlier flatten today: adopt it, never send it twice.
@@ -179,8 +225,10 @@ pub fn flatten(ctx: &LiveContext) -> Result<usize, LiveError> {
         }
         let wire = match submit_order(ctx.http, permit, &order) {
             Ok(wire) => wire,
-            Err(AlpacaError::Rejected { status, message }) => {
+            Err(AlpacaError::Rejected { status, message }) if matches!(status, 403 | 422) => {
                 // The broker refused this one: record it and close the rest.
+                // Any other status (401, 429, 5xx) is not a refusal of the order
+                // and falls through to stop the call (R-489).
                 let now = ctx.clock.now_utc();
                 ctx.store.set_order_state(
                     &order.client_order_id,
@@ -200,6 +248,7 @@ pub fn flatten(ctx: &LiveContext) -> Result<usize, LiveError> {
                     None,
                     now,
                 );
+                rejected += 1;
                 continue;
             }
             Err(other) => return Err(other.into()),
@@ -213,7 +262,11 @@ pub fn flatten(ctx: &LiveContext) -> Result<usize, LiveError> {
         )?;
         placed += 1;
     }
-    Ok(placed)
+    Ok(FlattenReport {
+        cancelled,
+        accepted: placed,
+        rejected,
+    })
 }
 
 /// Identifier of a flatten order: `pt-flatten-<yyyymmdd>-<symbol>`.

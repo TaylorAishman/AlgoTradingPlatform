@@ -22,7 +22,9 @@ pub fn cancel_open(args: &ConfirmArgs) -> anyhow::Result<i32> {
 /// Close every position and halt, printing how many orders were sent.
 /// Exits 1 without `--yes`, before any client is built. Works while halted.
 pub fn flatten(args: &ConfirmArgs) -> anyhow::Result<i32> {
-    kill_switch(args, "flatten", pt_live::killswitch::flatten)
+    kill_switch(args, "flatten", |ctx| {
+        pt_live::killswitch::flatten(ctx).map(|r| r.accepted)
+    })
 }
 
 /// Require `--yes`, build the live context as `run` does, call `action` and
