@@ -115,3 +115,29 @@ fn changing_a_signoff_value_does_not_change_the_hash() {
     c.signoff.min_sessions += 7;
     assert_eq!(base(), trial_hash(&c, &req(), PARAMS));
 }
+
+#[test]
+fn changing_the_request_capital_does_not_change_the_hash() {
+    // R-367
+    let mut r = req();
+    r.initial_capital = Decimal::new(250_000, 0);
+    assert_eq!(base(), trial_hash(&cfg(), &r, PARAMS));
+}
+
+#[test]
+fn hash_has_the_value_registered_before_the_change_at_either_capital() {
+    // R-367
+    const GOLDEN: &str = "3598a4f0dccb8d311cabb52fb1cd22962e32cc678bf338387ef265080e63dcfe";
+    assert_eq!(base(), GOLDEN);
+    let mut r = req();
+    r.initial_capital = Decimal::new(250_000, 0);
+    assert_eq!(trial_hash(&cfg(), &r, PARAMS), GOLDEN);
+}
+
+#[test]
+fn changing_the_config_backtest_capital_does_not_change_the_hash() {
+    // R-367
+    let mut c = cfg();
+    c.backtest.initial_capital = Decimal::new(250_000, 0);
+    assert_eq!(base(), trial_hash(&c, &req(), PARAMS));
+}

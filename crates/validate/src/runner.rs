@@ -53,14 +53,18 @@ fn dec(out: &mut String, key: &str, value: Decimal) {
 
 /// The lowercase hex SHA-256 of everything that changes a backtest result: the request,
 /// the strategy parameters, the universe, the research costs, sizing, risk, and the data
-/// feed. Paths and signoff thresholds are left out because they do not change the result.
+/// feed. Paths, signoff thresholds and the starting capital are left out: none of them
+/// changes which trial this is.
 pub fn trial_hash(cfg: &Config, req: &BacktestRequest, params: &str) -> String {
     let mut o = String::new();
     text(&mut o, "strategy", &req.strategy);
     text(&mut o, "params", params);
     line(&mut o, "from", req.from);
     line(&mut o, "to", req.to);
-    dec(&mut o, "initial_capital", req.initial_capital);
+
+    // The starting capital is not hashed (R-367). This fixed line is what the hash held
+    // at the original capital, so trial hashes registered before the change stay valid.
+    line(&mut o, "initial_capital", 100000);
 
     text(&mut o, "data.feed", &cfg.data.feed);
 
