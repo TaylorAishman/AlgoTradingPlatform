@@ -13,34 +13,48 @@ use crate::cli::ConfirmArgs;
 use crate::strategies::StoredTsmom;
 use crate::wiring;
 
+/// Lines to print and the exit code.
+type KillOutcome = Result<(Vec<String>, i32), LiveError>;
+
 /// Cancel every open order at the broker and print how many cancels were sent.
 /// Exits 1 without `--yes`, before any client is built.
 pub fn cancel_open(args: &ConfirmArgs) -> anyhow::Result<i32> {
-    kill_switch(args, "cancel-open", pt_live::killswitch::cancel_open)
-}
-
-/// Close every position and halt, printing how many orders were sent.
-/// Exits 1 without `--yes`, before any client is built. Works while halted.
-pub fn flatten(args: &ConfirmArgs) -> anyhow::Result<i32> {
-    kill_switch(args, "flatten", |ctx| {
-        pt_live::killswitch::flatten(ctx).map(|r| r.accepted)
+    kill_switch(args, "cancel-open", |ctx| {
+        let n = pt_live::killswitch::cancel_open(ctx)?;
+        Ok((vec![n.to_string()], 0))
     })
 }
 
-/// Require `--yes`, build the live context as `run` does, call `action` and
-/// print its count.
+/// Close every position and halt, printing the cancelled, accepted and rejected counts.
+/// Exits 1 without `--yes`, before any client is built, and when the broker rejected
+/// any order. Works while halted.
+pub fn flatten(args: &ConfirmArgs) -> anyhow::Result<i32> {
+    kill_switch(args, "flatten", |ctx| {
+        let r = pt_live::killswitch::flatten(ctx)?;
+        let lines = vec![
+            format!("cancelled {}", r.cancelled),
+            format!("accepted {}", r.accepted),
+            format!("rejected {}", r.rejected),
+        ];
+        Ok((lines, i32::from(r.rejected > 0)))
+    })
+}
+
+/// Require `--yes`, then the keys, build the live context as `run` does, call `action` and
+/// print its lines and return its exit code.
 fn kill_switch(
     args: &ConfirmArgs,
     name: &str,
-    action: fn(&LiveContext) -> Result<usize, LiveError>,
+    action: fn(&LiveContext) -> KillOutcome,
 ) -> anyhow::Result<i32> {
     if !args.yes {
         wiring::log("error", &format!("`{name}` needs --yes to confirm"));
         return Ok(1);
     }
+    // Keys come first: a missing key is reported before any config problem.
+    let keys = wiring::load_keys()?;
     let cfg = wiring::load_config()?;
     let owner = wiring::load_owner()?;
-    let keys = wiring::load_keys()?;
     let store = wiring::open_store(&cfg.run.db_path)?;
     let http = wiring::build_client()?;
     let alerter = Alerter::new(
@@ -69,7 +83,9 @@ fn kill_switch(
         strategy: &strategy,
         code_version: env!("CARGO_PKG_VERSION"),
     };
-    let n = action(&ctx)?;
-    println!("{n}");
-    Ok(0)
+    let (lines, code) = action(&ctx)?;
+    for line in lines {
+        println!("{line}");
+    }
+    Ok(code)
 }

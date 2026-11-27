@@ -83,6 +83,16 @@ fn flatten_without_keys_exits_one_naming_variables() {
 }
 
 #[test]
+fn kill_switch_without_keys_exits_one_naming_variables_in_every_stage() {
+    // R-396, R-386: no stage forbids the kill switch, so a missing key is the
+    // reported failure, not a stage refusal.
+    for stage in ["backtest", "ingest", "first_order", "paper"] {
+        assert_names_missing_keys(&["cancel-open", "--yes"], stage);
+        assert_names_missing_keys(&["flatten", "--yes"], stage);
+    }
+}
+
+#[test]
 fn only_one_key_variable_set_is_still_reported_missing() {
     // R-386: a half-set pair is never completed by guessing.
     let out = run(
@@ -112,7 +122,7 @@ fn missing_secrets_file_is_reported_by_name_not_guessed() {
 #[test]
 fn stage_refusal_still_comes_before_key_loading() {
     // R-386 with R-384: a refused command exits 4, not 1, with no keys.
-    let out = run(&["flatten", "--yes"], "ingest", &[]);
+    let out = run(&["data", "ingest"], "backtest", &[]);
     assert_eq!(out.status.code(), Some(4), "stderr: {}", stderr(&out));
 }
 

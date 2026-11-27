@@ -34,6 +34,59 @@ fn assert_refused_without_yes(cmd: &str) {
     );
 }
 
+/// Runs the command in `stage` with an owner file, optionally without keys.
+fn run_in_stage(e: &Env, stage: &str, keys: bool, args: &[&str]) -> std::process::Output {
+    std::fs::write(&e.owner, format!("stage = \"{stage}\"\n")).unwrap();
+    let mut cmd = std::process::Command::new(env!("CARGO_BIN_EXE_trader"));
+    cmd.arg("--config")
+        .arg(&e.cfg)
+        .args(args)
+        .current_dir(e.dir.path())
+        .env("HOME", e.home.path())
+        .env("PT_OWNER_FILE", &e.owner)
+        .env("PT_ALPACA_TRADING_URL", e.mock.url())
+        .env("PT_ALPACA_DATA_URL", e.mock.url())
+        .env_remove("PT_CONFIG")
+        .env_remove("PT_SECRETS_FILE")
+        .env_remove("APCA_API_KEY_ID")
+        .env_remove("APCA_API_SECRET_KEY");
+    if keys {
+        cmd.env("APCA_API_KEY_ID", "fake-key-id")
+            .env("APCA_API_SECRET_KEY", "fake-secret");
+    }
+    cmd.output().unwrap()
+}
+
+#[test]
+fn without_yes_exits_one_naming_yes_in_every_stage_with_or_without_keys() {
+    // R-396: confirmation comes before the stage check and the key check.
+    for cmd in ["cancel-open", "flatten"] {
+        for stage in ["backtest", "paper"] {
+            for keys in [true, false] {
+                let e = env();
+                let out = run_in_stage(&e, stage, keys, &[cmd]);
+                let text = format!("{}{}", stdout(&out), stderr(&out));
+                assert_eq!(out.status.code(), Some(1), "{cmd} {stage} {keys}: {text}");
+                assert!(text.contains("--yes"), "{cmd} {stage} {keys}: {text}");
+                assert!(e.mock.requests().is_empty(), "{cmd} {stage} {keys}");
+            }
+        }
+    }
+}
+
+#[test]
+fn with_yes_and_no_keys_exits_one_naming_missing_keys_and_makes_no_request() {
+    // R-396
+    for cmd in ["cancel-open", "flatten"] {
+        let e = env();
+        let out = run_in_stage(&e, "paper", false, &[cmd, "--yes"]);
+        let err = stderr(&out);
+        assert_eq!(out.status.code(), Some(1), "{cmd}: {err}");
+        assert!(err.contains("APCA_API_KEY_ID"), "{cmd}: {err}");
+        assert!(e.mock.requests().is_empty(), "{cmd}");
+    }
+}
+
 #[test]
 fn cancel_open_without_yes_exits_one_naming_yes_and_makes_no_request() {
     // R-396
