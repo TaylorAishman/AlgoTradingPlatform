@@ -20,4 +20,4 @@ Add a rule when the same problem shows up in two chains. Delete rules that never
 
 | Trigger | Check | Origin |
 | --- | --- | --- |
-| TODO: e.g. a serialized type changes | Old data still loads | chain name, incident |
+| `git merge-base main <chain>` is older than a chain listed in the plan's After column has landed, or `main..<chain>` contains commits of another chain | The chain branch must contain every After chain (landed on main or as its stacked base) and no other chain's step commits beyond its stacked base; `git merge-tree main <chain>` must show no conflict | live-settle, cli-data-check |
