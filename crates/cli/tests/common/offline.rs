@@ -20,6 +20,11 @@ pub struct Env {
 /// A temp working directory with a validated config (non-empty universe, feed
 /// `csv:synth`) and the research fixture imported from CSV: every weekday of 2024.
 pub fn env() -> Env {
+    env_with_max_order_notional(1_000_000)
+}
+
+/// As `env`, with `[risk] max_order_notional` set to the given value.
+pub fn env_with_max_order_notional(max_order_notional: u32) -> Env {
     let dir = tempfile::tempdir().unwrap();
     let home = tempfile::tempdir().unwrap();
     let mut text = String::new();
@@ -35,8 +40,9 @@ pub fn env() -> Env {
         "[data]\nfeed = \"csv:synth\"\n\n\
          [strategy]\nlookback_months = [1]\nvol_min_obs = 10\nvol_max_obs = 40\n\n\
          [sizing]\nmax_weight = 0.3\n\n\
-         [risk]\nmax_order_notional = 1000000\n\n\
+         [risk]\nmax_order_notional = {}\n\n\
          [run]\ndb_path = \"{}\"\noutput_dir = \"{}\"\n",
+        max_order_notional,
         dir.path().join("test.sqlite").display(),
         dir.path().join("reports").display()
     )
