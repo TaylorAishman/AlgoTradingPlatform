@@ -224,12 +224,42 @@ fn symbol(s: &str) -> Result<Symbol, ValidateError> {
     Symbol::new(s).map_err(|e| ValidateError::Invalid(format!("symbol {s:?}: {e}")))
 }
 
+/// Where a run's starting capital came from.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum CapitalSource {
+    Flag,
+    Account,
+    Config,
+}
+
+impl CapitalSource {
+    /// The name stored with the run.
+    pub fn as_str(self) -> &'static str {
+        match self {
+            CapitalSource::Flag => "flag",
+            CapitalSource::Account => "account",
+            CapitalSource::Config => "config",
+        }
+    }
+}
+
 /// Run `req` on adjusted prices with the research cost profile, store its equity and
-/// register it as a trial.
+/// register it as a trial. The capital is recorded with source `config`.
 pub fn run_and_record(
     store: &Store,
     cfg: &Config,
     req: &BacktestRequest,
+    clock: &dyn Clock,
+) -> Result<BacktestOutcome, ValidateError> {
+    run_and_record_with(store, cfg, req, CapitalSource::Config, clock)
+}
+
+/// Like `run_and_record`, and stores the starting capital with the stated `source`.
+pub fn run_and_record_with(
+    store: &Store,
+    cfg: &Config,
+    req: &BacktestRequest,
+    source: CapitalSource,
     clock: &dyn Clock,
 ) -> Result<BacktestOutcome, ValidateError> {
     let cal = Arc::new(store.calendar()?);
@@ -295,10 +325,12 @@ pub fn run_and_record(
     let n_obs = u32::try_from(excess.len())
         .map_err(|_| ValidateError::Invalid("too many observations".into()))?;
     let hash = trial_hash(cfg, req, &strategy.params_canonical());
-    let run_id = store.save_backtest(
+    let run_id = store.save_backtest_with_capital(
         strategy.id(),
         &hash,
         &config_hash(cfg),
+        req.initial_capital,
+        source.as_str(),
         &result.equity,
         clock.now_utc(),
     )?;
