@@ -171,3 +171,23 @@ fn status_exits_one_when_the_last_successful_run_is_older_than_the_limit() {
     let wide = run(&e, &["status", "--max-age-hours", "72"]);
     assert_eq!(wide.status.code(), Some(0), "stderr: {}", stderr(&wide));
 }
+
+#[test]
+fn report_on_an_empty_store_has_ten_zero_fidelity_elements() {
+    // R-539
+    let e = env();
+    let out = run(&e, &["report"]);
+    assert_eq!(out.status.code(), Some(0), "stderr: {}", stderr(&out));
+    let text = std::fs::read_to_string(reports(&e).join("status.json")).expect("status.json");
+    let json: serde_json::Value = serde_json::from_str(&text).unwrap();
+    let fidelity = json["fidelity"].as_array().expect("fidelity array");
+    assert_eq!(fidelity.len(), 10, "{json}");
+    for f in fidelity {
+        let zero = match &f["value"] {
+            serde_json::Value::String(s) => s.parse::<f64>().ok() == Some(0.0),
+            serde_json::Value::Number(n) => n.as_f64() == Some(0.0),
+            _ => false,
+        };
+        assert!(zero, "element not zero: {f}");
+    }
+}

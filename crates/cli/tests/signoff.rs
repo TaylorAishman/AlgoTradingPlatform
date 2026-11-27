@@ -122,3 +122,17 @@ fn signoff_report_can_be_run_again() {
     }
     assert!(signoff_md(&e).exists());
 }
+
+#[test]
+fn signoff_report_on_an_empty_store_exits_zero_and_prints_not_ready() {
+    // R-539
+    let e = env();
+    assert!(!e.dir.path().join("test.sqlite").exists());
+    let out = run(&e, &["signoff", "report"]);
+    assert_eq!(out.status.code(), Some(0), "stderr: {}", stderr(&out));
+    assert!(
+        stdout(&out).contains("NOT_READY"),
+        "stdout: {}",
+        stdout(&out)
+    );
+}
