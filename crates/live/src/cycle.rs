@@ -13,7 +13,9 @@ use pt_ops::alert::Level;
 
 use crate::context::LiveContext;
 use crate::error::LiveError;
-use crate::first_order::{first_order, first_order_accepted};
+use crate::first_order::{
+    first_order, first_order_accepted, plan_first_order_retry, RETRY_WAITS_SECS,
+};
 use crate::rebalance::{rebalance, RebalanceOutcome};
 use crate::reconcile::reconcile;
 use crate::settle::settle;
@@ -196,7 +198,18 @@ fn first_order_phases(
         is_first_order: true,
         first_order_already_sent: already_sent,
     };
-    submit_planned(ctx, &auth)?;
+    let mut report = submit_planned(ctx, &auth)?;
+    // A rejected first order is tried again under a new id, after a wait.
+    for (i, wait) in RETRY_WAITS_SECS.iter().enumerate() {
+        if report.rejected == 0 {
+            break;
+        }
+        ctx.http.sleep(std::time::Duration::from_secs(*wait));
+        if !plan_first_order_retry(ctx, wire_clock, i as u32 + 1)? {
+            break;
+        }
+        report = submit_planned(ctx, &auth)?;
+    }
     phases.push("submit".to_string());
     Ok(RunStatus::Ok)
 }
