@@ -36,7 +36,7 @@ pub fn first_order(ctx: &LiveContext, wire_clock: &WireClock) -> Result<bool, Li
         decision_id: None,
         symbol,
         side,
-        qty: approval.max_qty,
+        qty: approval.qty,
         leg: 0,
         state: OrderState::Intent,
         broker_order_id: None,
