@@ -6,13 +6,14 @@ use std::sync::Arc;
 use anyhow::Context;
 use chrono::Utc;
 use pt_core::types::Symbol;
-use pt_ops::report::{last_ok_run_age_hours, write_status, ReportInputs};
+use pt_ops::report::last_ok_run_age_hours;
 use pt_shadow::fidelity::{fidelity, Fidelity};
 use pt_shadow::signoff::{evaluate, write_signoff, Verdict};
 use pt_store::error::StoreError;
 use pt_strategy::tsmom::{Tsmom, TsmomParams};
 
 use crate::cli::{HaltCmd, SignoffCmd};
+use crate::reporting;
 use crate::wiring;
 
 /// Inspect or change halts. No stage is required and no request is made.
@@ -69,15 +70,12 @@ pub fn report() -> anyhow::Result<i32> {
     let cfg = wiring::load_config()?;
     let owner = wiring::load_owner()?;
     let store = wiring::open_store(&cfg.run.db_path)?;
-    let inputs = ReportInputs {
-        store: &store,
-        cfg: &cfg,
-        stage: owner.stage.as_str(),
-        fidelity: &[],
-        validation_signoff: owner.validation_signoff.as_deref(),
-        now: Utc::now(),
-    };
-    let (md, json) = write_status(&inputs)?;
+    let (md, json) = reporting::write_report(
+        &store,
+        &cfg,
+        owner.stage.as_str(),
+        owner.validation_signoff.as_deref(),
+    )?;
     println!("wrote {} and {}", md.display(), json.display());
     Ok(0)
 }

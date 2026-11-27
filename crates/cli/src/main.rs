@@ -8,6 +8,7 @@ mod cmd_kill;
 mod cmd_ops;
 mod cmd_run;
 mod cmd_validate;
+mod reporting;
 mod strategies;
 mod wiring;
 
