@@ -10,7 +10,7 @@ use pt_core::order_state::OrderState;
 use pt_core::types::{Side, Symbol};
 use pt_gate::gate::{Capability, OrderSummary};
 use pt_ops::alert::Level;
-use pt_store::trading::OrderRow;
+use pt_store::trading::{Book, OrderRow};
 use rust_decimal::Decimal;
 
 use crate::context::LiveContext;
@@ -101,6 +101,8 @@ pub struct FlattenReport {
 /// and accepted by this call and those rejected; working and adopted orders
 /// are in neither, and a partial failure is reported only through its alert. A gate
 /// refusal or any other error stops the call.
+///
+/// A flatten order stored while the paper ledger is empty is marked off-ledger.
 ///
 /// Once the halt is set, `flatten` cancels every open order except its own working flatten orders ([`cancel_open`]),
 /// then settles ([`crate::settle::settle`]) so cancelled orders and their
@@ -204,6 +206,11 @@ pub fn flatten(ctx: &LiveContext) -> Result<FlattenReport, LiveError> {
                 reference_price: Decimal::ZERO,
                 trade_date: today,
             })?;
+            // Before the opening balance exists the paper book does not hold
+            // this position, so its closing fill must stay off the ledger.
+            if ctx.store.ledger(Book::Paper)?.is_empty() {
+                ctx.store.mark_off_ledger(&order.client_order_id)?;
+            }
         }
         if let Some(held) = order_by_client_id(ctx.http, &order.client_order_id)? {
             // Already sent by an earlier flatten today: adopt it, never send it twice.
