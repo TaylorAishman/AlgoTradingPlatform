@@ -15,9 +15,6 @@ use rust_decimal::Decimal;
 
 use crate::wiring;
 
-/// Starting capital of a research backtest.
-const INITIAL_CAPITAL: i64 = 100_000;
-
 #[derive(Debug, Subcommand)]
 pub enum BacktestCmd {
     /// Run a backtest
@@ -87,7 +84,7 @@ fn run(
             return Ok(1);
         }
         Some(c) => (c, CapitalSource::Flag),
-        None => (Decimal::new(INITIAL_CAPITAL, 0), CapitalSource::Config),
+        None => (cfg.backtest.initial_capital, CapitalSource::Config),
     };
     let req = BacktestRequest {
         strategy: strategy.unwrap_or("tsmom").to_string(),
@@ -128,7 +125,7 @@ fn crosscheck(from: &str, to: &str, with_costs: bool) -> anyhow::Result<i32> {
         strategy: "tsmom".to_string(),
         from: date("--from", from)?,
         to: date("--to", to)?,
-        initial_capital: Decimal::new(INITIAL_CAPITAL, 0),
+        initial_capital: cfg.backtest.initial_capital,
     };
     let path = Path::new(&cfg.run.db_path);
     let store = Store::open(path).with_context(|| format!("opening store {}", path.display()))?;
