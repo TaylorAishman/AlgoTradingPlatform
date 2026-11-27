@@ -5,7 +5,6 @@
 
 use pt_alpaca::reference::{clock, WireClock};
 use pt_config::hash::config_hash;
-use pt_core::order_state::OrderState;
 use pt_data::ingest::ingest;
 use pt_data::reference::{sync_assets, sync_calendar};
 use pt_gate::gate::{AuthContext, Capability};
@@ -14,7 +13,7 @@ use pt_ops::alert::Level;
 
 use crate::context::LiveContext;
 use crate::error::LiveError;
-use crate::first_order::first_order;
+use crate::first_order::{first_order, first_order_accepted};
 use crate::rebalance::{rebalance, RebalanceOutcome};
 use crate::reconcile::reconcile;
 use crate::settle::settle;
@@ -185,7 +184,7 @@ fn first_order_phases(
     }
 
     // Read before planning, so the order planned by this run is not counted.
-    let already_sent = first_order_sent(ctx)?;
+    let already_sent = first_order_accepted(ctx.store)?;
     first_order(ctx, wire_clock)?;
     phases.push("first_order".to_string());
 
@@ -200,22 +199,6 @@ fn first_order_phases(
     submit_planned(ctx, &auth)?;
     phases.push("submit".to_string());
     Ok(RunStatus::Ok)
-}
-
-/// Whether a first order has ever reached the broker: any stored first-order
-/// id in a state past `Intent` that a POST produced.
-fn first_order_sent(ctx: &LiveContext) -> Result<bool, LiveError> {
-    let sent = ctx.store.orders_in_states(&[
-        OrderState::Submitted,
-        OrderState::PartiallyFilled,
-        OrderState::Filled,
-        OrderState::Canceled,
-        OrderState::Expired,
-        OrderState::Rejected,
-    ])?;
-    Ok(sent
-        .iter()
-        .any(|o| o.client_order_id.starts_with("pt-first-")))
 }
 
 /// The paper-stage phases, after the read-only ones: the guard phases, then

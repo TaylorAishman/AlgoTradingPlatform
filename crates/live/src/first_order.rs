@@ -1,6 +1,7 @@
 use pt_alpaca::reference::WireClock;
 use pt_core::order_state::OrderState;
 use pt_core::types::{Side, Symbol};
+use pt_store::db::Store;
 use pt_store::error::StoreError;
 use pt_store::trading::OrderRow;
 use rust_decimal::Decimal;
@@ -48,4 +49,20 @@ pub fn first_order(ctx: &LiveContext, wire_clock: &WireClock) -> Result<bool, Li
         Ok(()) | Err(StoreError::Duplicate(_)) => Ok(true),
         Err(e) => Err(e.into()),
     }
+}
+
+/// Whether the broker has accepted a first order (R-493): any stored
+/// first-order row, retries included, in a state a broker acceptance leads to.
+/// An `Intent` or `Rejected` row does not count.
+pub fn first_order_accepted(store: &Store) -> Result<bool, LiveError> {
+    let accepted = store.orders_in_states(&[
+        OrderState::Submitted,
+        OrderState::PartiallyFilled,
+        OrderState::Filled,
+        OrderState::Canceled,
+        OrderState::Expired,
+    ])?;
+    Ok(accepted
+        .iter()
+        .any(|o| o.client_order_id.starts_with("pt-first-")))
 }
