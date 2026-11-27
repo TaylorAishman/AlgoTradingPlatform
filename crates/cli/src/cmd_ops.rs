@@ -15,21 +15,11 @@ use pt_ops::alert::Alerter;
 use pt_ops::report::{last_ok_run_age_hours, write_status, ReportInputs};
 use pt_shadow::fidelity::{fidelity, Fidelity};
 use pt_shadow::signoff::{evaluate, write_signoff, Verdict};
-use pt_store::db::Store;
 use pt_store::error::StoreError;
 use pt_strategy::tsmom::{Tsmom, TsmomParams};
 
 use crate::cli::{ConfirmArgs, HaltCmd, SignoffCmd};
 use crate::wiring;
-
-fn open_store(db_path: &str) -> anyhow::Result<Store> {
-    let path = Path::new(db_path);
-    if let Some(parent) = path.parent().filter(|p| !p.as_os_str().is_empty()) {
-        std::fs::create_dir_all(parent)
-            .with_context(|| format!("creating {}", parent.display()))?;
-    }
-    Store::open(path).with_context(|| format!("opening store {}", path.display()))
-}
 
 /// Inspect or change halts. No stage is required and no request is made.
 ///
@@ -37,7 +27,7 @@ fn open_store(db_path: &str) -> anyhow::Result<Store> {
 /// exit 0, and `clear` of an unknown or already cleared id exits 1.
 pub fn halt(action: &HaltCmd) -> anyhow::Result<i32> {
     let cfg = wiring::load_config()?;
-    let store = open_store(&cfg.run.db_path)?;
+    let store = wiring::open_store(&cfg.run.db_path)?;
     match action {
         HaltCmd::Status => {
             let active = store.active_halts()?;
@@ -103,13 +93,10 @@ fn kill_switch(
     let cfg = wiring::load_config()?;
     let owner = wiring::load_owner()?;
     let keys = wiring::load_keys()?;
-    let store = open_store(&cfg.run.db_path)?;
+    let store = wiring::open_store(&cfg.run.db_path)?;
     let http = wiring::build_client()?;
     let alerter = Alerter::new(
-        std::env::var("PT_ALERT_WEBHOOK_URL")
-            .ok()
-            .filter(|u| !u.is_empty())
-            .or_else(|| owner.alert_webhook_url.clone()),
+        wiring::alert_webhook(owner.alert_webhook_url.clone()),
         vec![
             keys.key_id.expose().to_string(),
             keys.secret_key.expose().to_string(),
@@ -149,7 +136,7 @@ fn kill_switch(
 pub fn report() -> anyhow::Result<i32> {
     let cfg = wiring::load_config()?;
     let owner = wiring::load_owner()?;
-    let store = open_store(&cfg.run.db_path)?;
+    let store = wiring::open_store(&cfg.run.db_path)?;
     let inputs = ReportInputs {
         store: &store,
         cfg: &cfg,
@@ -168,7 +155,7 @@ pub fn report() -> anyhow::Result<i32> {
 /// Without a limit, only the existence of an `ok` run is checked.
 pub fn status(max_age_hours: Option<u64>) -> anyhow::Result<i32> {
     let cfg = wiring::load_config()?;
-    let store = open_store(&cfg.run.db_path)?;
+    let store = wiring::open_store(&cfg.run.db_path)?;
     match last_ok_run_age_hours(&store, Utc::now())? {
         None => {
             wiring::log("error", "no successful run has finished");
@@ -205,7 +192,7 @@ pub fn signoff(action: &SignoffCmd) -> anyhow::Result<i32> {
 
 fn signoff_report() -> anyhow::Result<i32> {
     let cfg = wiring::load_config()?;
-    let store = open_store(&cfg.run.db_path)?;
+    let store = wiring::open_store(&cfg.run.db_path)?;
     let f = match store.calendar() {
         // No calendar means nothing has been stored: the sample is empty.
         Err(StoreError::NotFound(_)) => Fidelity {

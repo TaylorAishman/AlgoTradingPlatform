@@ -1,7 +1,7 @@
 //! Shared wiring for the command modules.
 
 use std::collections::BTreeMap;
-use std::path::PathBuf;
+use std::path::{Path, PathBuf};
 use std::sync::Arc;
 
 use anyhow::{anyhow, Context};
@@ -14,6 +14,7 @@ use pt_config::error::ConfigError;
 use pt_config::secrets::{load_api_keys, ApiKeys};
 use pt_gate::error::GateError;
 use pt_gate::owner::{load_owner_file, OwnerFile, Stage};
+use pt_store::db::Store;
 
 use clap::Parser;
 
@@ -105,6 +106,25 @@ pub fn stage_refusal(command: &str, required: Stage) -> anyhow::Result<Option<St
         stage_name(required),
         stage_name(current)
     )))
+}
+
+/// Open the store at `db_path`, creating its parent directory first.
+pub fn open_store(db_path: &str) -> anyhow::Result<Store> {
+    let path = Path::new(db_path);
+    if let Some(parent) = path.parent().filter(|p| !p.as_os_str().is_empty()) {
+        std::fs::create_dir_all(parent)
+            .with_context(|| format!("creating {}", parent.display()))?;
+    }
+    Store::open(path).with_context(|| format!("opening store {}", path.display()))
+}
+
+/// The alert webhook: `PT_ALERT_WEBHOOK_URL` when set and non-empty, else the
+/// owner file's.
+pub fn alert_webhook(owner_url: Option<String>) -> Option<String> {
+    match std::env::var("PT_ALERT_WEBHOOK_URL") {
+        Ok(url) if !url.is_empty() => Some(url),
+        _ => owner_url,
+    }
 }
 
 /// Calls per minute the client allows itself. The Basic plan allows 200

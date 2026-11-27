@@ -74,30 +74,13 @@ impl Strategy for StoredTsmom<'_> {
     }
 }
 
-fn open_store(db_path: &str) -> anyhow::Result<Store> {
-    let path = Path::new(db_path);
-    if let Some(parent) = path.parent().filter(|p| !p.as_os_str().is_empty()) {
-        std::fs::create_dir_all(parent)
-            .with_context(|| format!("creating {}", parent.display()))?;
-    }
-    Store::open(path).with_context(|| format!("opening store {}", path.display()))
-}
-
-/// The alert webhook: `PT_ALERT_WEBHOOK_URL`, else the owner file's.
-fn webhook(owner_url: Option<String>) -> Option<String> {
-    match std::env::var("PT_ALERT_WEBHOOK_URL") {
-        Ok(url) if !url.is_empty() => Some(url),
-        _ => owner_url,
-    }
-}
-
 /// Run one cycle. Exits 0 when it ends ok, 1 when it fails, 2 when it is
 /// halted and 3 when another run holds the lock.
 pub fn run() -> anyhow::Result<i32> {
     let cfg = wiring::load_config()?;
     let owner = wiring::load_owner()?;
     let keys = wiring::load_keys()?;
-    let store = open_store(&cfg.run.db_path)?;
+    let store = wiring::open_store(&cfg.run.db_path)?;
     let _lock = match acquire_run_lock(Path::new(&cfg.run.db_path)) {
         Ok(lock) => lock,
         Err(LiveError::AlreadyRunning) => {
@@ -112,7 +95,7 @@ pub fn run() -> anyhow::Result<i32> {
     let http = wiring::build_client()?;
 
     let alerter = Alerter::new(
-        webhook(owner.alert_webhook_url.clone()),
+        wiring::alert_webhook(owner.alert_webhook_url.clone()),
         vec![
             keys.key_id.expose().to_string(),
             keys.secret_key.expose().to_string(),
