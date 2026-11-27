@@ -6,6 +6,7 @@ use pt_store::error::StoreError;
 use pt_store::trading::OrderRow;
 use rust_decimal::Decimal;
 
+use crate::adopt::adopt_if_held;
 use crate::context::LiveContext;
 use crate::error::LiveError;
 use crate::ids::{first_order_id, first_order_retry_id};
@@ -67,6 +68,16 @@ pub fn plan_first_order_retry(
     };
     if approval.valid_on != trade_session(wire_clock) {
         return Ok(false);
+    }
+    // R-496: the broker may hold the previous attempt despite its error.
+    // Adopt it instead of sending a duplicate under a new id.
+    let previous = if attempt <= 1 {
+        first_order_id(approval.valid_on, &approval.symbol)
+    } else {
+        first_order_retry_id(approval.valid_on, &approval.symbol, attempt - 1)
+    };
+    if adopt_if_held(ctx, &previous)? {
+        return Ok(true);
     }
     let side = match approval.side.as_str() {
         "buy" => Side::Buy,
