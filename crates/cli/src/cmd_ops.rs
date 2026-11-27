@@ -1,19 +1,19 @@
 //! `halt`, `report`, `status` and `signoff` commands.
 
 use std::path::Path;
-use std::sync::Arc;
 
 use anyhow::Context;
 use chrono::Utc;
 use pt_core::types::Symbol;
 use pt_ops::report::last_ok_run_age_hours;
-use pt_shadow::fidelity::{fidelity, Fidelity};
+use pt_shadow::fidelity::fidelity;
 use pt_shadow::signoff::{evaluate, write_signoff, Verdict};
 use pt_store::error::StoreError;
-use pt_strategy::tsmom::{Tsmom, TsmomParams};
+use pt_strategy::tsmom::TsmomParams;
 
 use crate::cli::{HaltCmd, SignoffCmd};
 use crate::reporting;
+use crate::strategies::StoredTsmom;
 use crate::wiring;
 
 /// Inspect or change halts. No stage is required and no request is made.
@@ -64,8 +64,8 @@ pub fn halt(action: &HaltCmd) -> anyhow::Result<i32> {
 
 /// Write `status.md` and `status.json` from the store. Needs no network.
 ///
-/// The report inputs are assembled in `reporting.rs`, shared with `run`. The
-/// fidelity section is empty for now.
+/// The report inputs, fidelity summary included, are assembled in
+/// `reporting.rs`, shared with `run`.
 pub fn report() -> anyhow::Result<i32> {
     let cfg = wiring::load_config()?;
     let owner = wiring::load_owner()?;
@@ -113,7 +113,7 @@ pub fn status(max_age_hours: Option<u64>) -> anyhow::Result<i32> {
 /// network. Prints the verdict and exits 0, whatever the verdict.
 ///
 /// With no stored calendar nothing has been recorded, so the sample is empty
-/// and the verdict is `NOT_READY`.
+/// and the verdict is `NOT_READY`; the fidelity summary handles that itself.
 pub fn signoff(action: &SignoffCmd) -> anyhow::Result<i32> {
     match action {
         SignoffCmd::Report => signoff_report(),
@@ -123,31 +123,13 @@ pub fn signoff(action: &SignoffCmd) -> anyhow::Result<i32> {
 fn signoff_report() -> anyhow::Result<i32> {
     let cfg = wiring::load_config()?;
     let store = wiring::open_store(&cfg.run.db_path)?;
-    let f = match store.calendar() {
-        // No calendar means nothing has been stored: the sample is empty.
-        Err(StoreError::NotFound(_)) => Fidelity {
-            n_sessions: 0,
-            n_rebalances: 0,
-            n_fills: 0,
-            replay_mismatches: 0,
-            reconciliation_breaks: 0,
-            missed_sessions: 0,
-            late_rebalances: 0,
-            mean_slippage_bps: 0.0,
-            mean_diff_bps: 0.0,
-            max_abs_diff_bps: 0.0,
-        },
-        Err(e) => return Err(e.into()),
-        Ok(calendar) => {
-            let params = TsmomParams {
-                lookback_months: cfg.strategy.lookback_months.clone(),
-                risk_free_symbol: Symbol::new(&cfg.strategy.risk_free_symbol)
-                    .context("strategy.risk_free_symbol")?,
-            };
-            let strategy = Tsmom::new(params, Arc::new(calendar));
-            fidelity(&store, &cfg, &strategy)?
-        }
+    let params = TsmomParams {
+        lookback_months: cfg.strategy.lookback_months.clone(),
+        risk_free_symbol: Symbol::new(&cfg.strategy.risk_free_symbol)
+            .context("strategy.risk_free_symbol")?,
     };
+    let strategy = StoredTsmom::new(&store, params, cfg.data.start)?;
+    let f = fidelity(&store, &cfg, &strategy)?;
     let report = evaluate(&f, &cfg);
     let out_dir = Path::new(&cfg.run.output_dir);
     std::fs::create_dir_all(out_dir).with_context(|| format!("creating {}", out_dir.display()))?;
