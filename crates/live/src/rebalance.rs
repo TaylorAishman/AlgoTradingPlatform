@@ -121,9 +121,11 @@ pub fn rebalance(ctx: &LiveContext, wire_clock: &WireClock) -> Result<RebalanceO
     let mut universe = Vec::new();
     let mut shortable = BTreeSet::new();
     let mut untradable = Vec::new();
+    let mut no_snapshot = Vec::new();
     for inst in &ctx.cfg.universe {
         let symbol = symbol(&inst.symbol)?;
         let Some(asset) = ctx.store.asset_asof(&symbol, None)? else {
+            no_snapshot.push(symbol);
             continue;
         };
         if !asset.tradable {
@@ -232,6 +234,15 @@ pub fn rebalance(ctx: &LiveContext, wire_clock: &WireClock) -> Result<RebalanceO
     )?;
     // After the decision is stored, so a rerun (which returns above) or a
     // data-not-ready retry never repeats an alert for the same decision.
+    for symbol in &no_snapshot {
+        ctx.store.record_alert(
+            "warn",
+            "asset_missing",
+            &format!("{symbol} has no stored asset snapshot; left out of the universe"),
+            false,
+            now,
+        )?;
+    }
     for symbol in &untradable {
         ctx.store.record_alert(
             "warn",
