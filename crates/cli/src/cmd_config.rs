@@ -24,18 +24,19 @@ const EARLIEST: NaiveDate = NaiveDate::from_ymd_opt(1900, 1, 1).unwrap();
 const LATEST: NaiveDate = NaiveDate::from_ymd_opt(9999, 12, 31).unwrap();
 
 /// What the store already holds: a calendar, and raw bars for every universe
-/// symbol on the configured feed. Read offline; a missing config or store
+/// symbol on the configured feed, and whether a first order was accepted.
+/// Read offline; a missing config or store
 /// counts as nothing loaded, and a store that does not exist is not created.
-fn store_facts() -> (bool, bool) {
+fn store_facts() -> (bool, bool, bool) {
     let Ok(cfg) = wiring::load_config() else {
-        return (false, false);
+        return (false, false, false);
     };
     let path = std::path::Path::new(&cfg.run.db_path);
     if !path.is_file() {
-        return (false, false);
+        return (false, false, false);
     }
     let Ok(store) = Store::open(path) else {
-        return (false, false);
+        return (false, false, false);
     };
     let calendar_loaded = store.calendar().is_ok();
     let bars_loaded = !cfg.universe.is_empty()
@@ -56,22 +57,23 @@ fn store_facts() -> (bool, bool) {
                 })
                 .is_some_and(|bars| !bars.is_empty())
         });
-    (calendar_loaded, bars_loaded)
+    let first_order_sent = pt_live::first_order::first_order_accepted(&store).unwrap_or(false);
+    (calendar_loaded, bars_loaded, first_order_sent)
 }
 
 /// Print the stage and the owner checklist. Needs no network: keys count when
 /// they load from the environment or `PT_SECRETS_FILE`, and the calendar and
-/// bars count when the configured store holds them. The first-order fact is
-/// not yet read.
+/// bars count when the configured store holds them, and the first order counts
+/// when the store holds an accepted one.
 pub fn gates() -> anyhow::Result<i32> {
     let owner = wiring::load_owner()?;
     let keys_present = wiring::load_keys().is_ok();
-    let (calendar_loaded, bars_loaded) = store_facts();
+    let (calendar_loaded, bars_loaded, first_order_sent) = store_facts();
     let facts = Facts {
         keys_present,
         calendar_loaded,
         bars_loaded,
-        first_order_sent: false,
+        first_order_sent,
     };
     println!("stage: {}", owner.stage.as_str());
     for item in gate_status(&owner, &facts) {
