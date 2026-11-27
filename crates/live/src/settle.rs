@@ -45,7 +45,6 @@ pub fn settle(ctx: &LiveContext) -> Result<SettleReport, LiveError> {
     let rows = ctx.store.orders_in_states(&open)?;
     let Some(earliest) = rows.iter().map(|r| r.trade_date).min() else {
         abandon_legs(ctx)?;
-        report.legs_released = released_legs(ctx)?;
         return Ok(report);
     };
     let after = Utc.from_utc_datetime(&earliest.and_time(NaiveTime::MIN));
@@ -55,6 +54,7 @@ pub fn settle(ctx: &LiveContext) -> Result<SettleReport, LiveError> {
         *stored.entry(f.broker_order_id).or_default() += f.qty;
     }
 
+    let mut newly_filled: Vec<OrderRow> = Vec::new();
     for row in rows {
         let Some(wire) = order_by_client_id(ctx.http, &row.client_order_id)? else {
             continue;
@@ -103,9 +103,12 @@ pub fn settle(ctx: &LiveContext) -> Result<SettleReport, LiveError> {
             ctx.clock.now_utc(),
         )?;
         report.orders_updated += 1;
+        if state == OrderState::Filled {
+            newly_filled.push(row);
+        }
     }
     abandon_legs(ctx)?;
-    report.legs_released = released_legs(ctx)?;
+    report.legs_released = released_legs(ctx, &newly_filled)?;
     Ok(report)
 }
 
@@ -173,13 +176,13 @@ fn abandon_legs(ctx: &LiveContext) -> Result<(), LiveError> {
     Ok(())
 }
 
-/// Counts the leg-2 intents whose leg 1 (same decision and symbol) is `Filled`.
-fn released_legs(ctx: &LiveContext) -> Result<usize, LiveError> {
-    let filled = ctx.store.orders_in_states(&[OrderState::Filled])?;
+/// Counts the leg-2 intents whose leg 1 (same decision and symbol) became
+/// `Filled` in this settlement, so a repeat settle releases nothing.
+fn released_legs(ctx: &LiveContext, filled: &[OrderRow]) -> Result<usize, LiveError> {
     let intents = ctx.store.orders_in_states(&[OrderState::Intent])?;
     Ok(intents
         .iter()
-        .filter(|o| o.leg == 2 && leg1_filled(o, &filled))
+        .filter(|o| o.leg == 2 && leg1_filled(o, filled))
         .count())
 }
 
