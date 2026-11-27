@@ -17,6 +17,8 @@ pub enum GateError {
     FirstOrderMismatch,
     #[error("the first order has already been sent")]
     FirstOrderAlreadySent,
+    #[error("the order does not reduce an existing position")]
+    NotRiskReducing,
     #[error("the owner file is inside the repository")]
     OwnerFileInRepo,
     #[error("owner file parse error: {0}")]

@@ -5,10 +5,8 @@ mod common;
 use common::{d, sym, LiveFixture};
 use pt_core::order_state::OrderState;
 use pt_core::types::Side;
-use pt_gate::error::GateError;
-use pt_gate::gate::AuthContext;
-use pt_gate::owner::Stage;
-use pt_live::error::LiveError;
+use pt_gate::gate::{AuthContext, Gate};
+use pt_gate::owner::{OwnerFile, Stage};
 use pt_live::killswitch::cancel_open;
 use pt_live::settle::settle;
 use pt_live::submit::submit_planned;
@@ -109,16 +107,19 @@ fn cancel_open_works_while_halted() {
 
 // R-321
 #[test]
-fn in_dry_run_cancel_open_is_forbidden_and_sends_nothing() {
-    let fx = LiveFixture::new(Stage::DryRun);
+fn cancel_open_works_in_every_stage() {
+    for stage in [Stage::Backtest, Stage::Ingest, Stage::DryRun] {
+        let mut fx = submitted_fixture();
+        fx.gate = Gate::new(OwnerFile {
+            stage,
+            ..OwnerFile::default()
+        });
 
-    let result = cancel_open(&fx.ctx());
+        let n = cancel_open(&fx.ctx()).unwrap_or_else(|e| panic!("{stage:?}: {e:?}"));
 
-    assert!(
-        matches!(result, Err(LiveError::Gate(GateError::StageForbids))),
-        "got {result:?}"
-    );
-    assert_eq!(deletes(&fx), 0, "no DELETE");
+        assert_eq!(n, 2, "{stage:?}");
+        assert_eq!(deletes(&fx), 2, "{stage:?}: two DELETE requests");
+    }
 }
 
 // R-321
