@@ -29,10 +29,19 @@ use crate::snapshot::trade_session;
 /// skipped, not counted, and the rest are still cancelled. Any other error
 /// stops the call.
 pub fn cancel_open(ctx: &LiveContext) -> Result<usize, LiveError> {
+    cancel_matching(ctx, false)
+}
+
+/// Cancels the open orders, leaving working flatten orders alone when
+/// `keep_flatten` is set: they are the closing orders themselves.
+fn cancel_matching(ctx: &LiveContext, keep_flatten: bool) -> Result<usize, LiveError> {
     ctx.gate.allows(Capability::CancelOrder)?;
     let open = [OrderState::Submitted, OrderState::PartiallyFilled];
     let mut cancelled = 0;
     for row in ctx.store.orders_in_states(&open)? {
+        if keep_flatten && row.client_order_id.starts_with("pt-flatten-") {
+            continue;
+        }
         let broker_id = match row.broker_order_id {
             Some(id) => id,
             None => match order_by_client_id(ctx.http, &row.client_order_id)? {
@@ -56,7 +65,7 @@ pub fn cancel_open(ctx: &LiveContext) -> Result<usize, LiveError> {
 /// orders the broker rejected. Adopted and already-working orders count in none.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
 pub struct FlattenReport {
-    /// Open orders cancelled before closing (`flatten` does not cancel yet).
+    /// Open orders cancelled before closing.
     pub cancelled: usize,
     /// Orders sent and accepted by the broker.
     pub accepted: usize,
@@ -91,9 +100,9 @@ pub struct FlattenReport {
 /// are in neither, and a partial failure is reported only through its alert. A gate
 /// refusal or any other error stops the call.
 ///
-/// After [`cancel_open`], run [`crate::settle::settle`] before `flatten`: a
-/// cancelled order's stored row stays `Submitted` until settle, and `flatten`
-/// skips a symbol whose row is `Submitted`.
+/// Once the halt is set, `flatten` cancels every open order except its own working flatten orders ([`cancel_open`]),
+/// then settles ([`crate::settle::settle`]) so cancelled orders and their
+/// partial fills are stored, and only then reads the positions to close.
 pub fn flatten(ctx: &LiveContext) -> Result<FlattenReport, LiveError> {
     if !ctx
         .store
@@ -107,6 +116,8 @@ pub fn flatten(ctx: &LiveContext) -> Result<FlattenReport, LiveError> {
             ctx.clock.now_utc(),
         )?;
     }
+    let cancelled = cancel_matching(ctx, true)?;
+    crate::settle::settle(ctx)?;
     let today = trade_session(&reference::clock(ctx.http)?);
     let mut held = positions(ctx.http)?;
     held.retain(|p| p.qty != 0);
@@ -219,7 +230,7 @@ pub fn flatten(ctx: &LiveContext) -> Result<FlattenReport, LiveError> {
         placed += 1;
     }
     Ok(FlattenReport {
-        cancelled: 0,
+        cancelled,
         accepted: placed,
         rejected,
     })
