@@ -26,3 +26,5 @@ pub fn stderr(out: &Output) -> String {
 }
 
 pub mod live;
+
+pub mod offline;

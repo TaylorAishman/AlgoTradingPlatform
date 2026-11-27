@@ -6,13 +6,14 @@ use std::fmt::Write as _;
 use std::sync::Arc;
 
 use chrono::NaiveDate;
+use pt_calendar::calendar::TradingCalendar;
 use pt_calendar::schedule::monthly_schedule;
 use pt_config::config::Config;
 use pt_config::hash::config_hash;
 use pt_core::clock::Clock;
 use pt_core::types::{Adjustment, PriceBasis, Symbol};
 use pt_data::view::StoreView;
-use pt_engine::decision::params_from_config;
+use pt_engine::decision::{params_from_config, DecisionParams};
 use pt_engine::schedule::run_backtest;
 use pt_engine::simulate::{SimConfig, SimResult};
 use pt_stats::descriptive::returns_from_equity;
@@ -224,6 +225,71 @@ fn symbol(s: &str) -> Result<Symbol, ValidateError> {
     Symbol::new(s).map_err(|e| ValidateError::Invalid(format!("symbol {s:?}: {e}")))
 }
 
+/// What a run needs before it simulates, shared by the research run and the cross-check.
+pub(crate) struct Setup {
+    pub cal: Arc<TradingCalendar>,
+    pub universe: Vec<Symbol>,
+    pub shortable: BTreeSet<Symbol>,
+    pub risk_free: Symbol,
+    pub strategy: Box<dyn Strategy>,
+    pub view: StoreView,
+    pub params: DecisionParams,
+}
+
+impl Setup {
+    /// The calendar, universe, strategy, adjusted-price view and parameters for `req`.
+    pub(crate) fn build(
+        store: &Store,
+        cfg: &Config,
+        req: &BacktestRequest,
+    ) -> Result<Setup, ValidateError> {
+        let cal = Arc::new(store.calendar()?);
+        let universe = cfg
+            .universe
+            .iter()
+            .map(|i| symbol(&i.symbol))
+            .collect::<Result<Vec<_>, _>>()?;
+        let shortable: BTreeSet<Symbol> = cfg
+            .universe
+            .iter()
+            .zip(&universe)
+            .filter(|(i, _)| i.shortable)
+            .map(|(_, s)| s.clone())
+            .collect();
+        let risk_free = symbol(&cfg.strategy.risk_free_symbol)?;
+        let strategy: Box<dyn Strategy> = match req.strategy.as_str() {
+            "tsmom" => Box::new(Tsmom::new(
+                TsmomParams {
+                    lookback_months: cfg.strategy.lookback_months.clone(),
+                    risk_free_symbol: risk_free.clone(),
+                },
+                Arc::clone(&cal),
+            )),
+            "benchmark" => Box::new(LongOnly::new(Arc::clone(&cal))),
+            other => {
+                return Err(ValidateError::Invalid(format!(
+                    "unknown strategy {other:?}"
+                )))
+            }
+        };
+        let mut symbols = universe.clone();
+        if !symbols.contains(&risk_free) {
+            symbols.push(risk_free.clone());
+        }
+        let view = StoreView::load(store, &symbols, &cfg.data.feed, PriceBasis::Adjusted, None)?;
+        let params = params_from_config(cfg);
+        Ok(Setup {
+            cal,
+            universe,
+            shortable,
+            risk_free,
+            strategy,
+            view,
+            params,
+        })
+    }
+}
+
 /// Where a run's starting capital came from.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum CapitalSource {
@@ -262,44 +328,15 @@ pub fn run_and_record_with(
     source: CapitalSource,
     clock: &dyn Clock,
 ) -> Result<BacktestOutcome, ValidateError> {
-    let cal = Arc::new(store.calendar()?);
-    let universe = cfg
-        .universe
-        .iter()
-        .map(|i| symbol(&i.symbol))
-        .collect::<Result<Vec<_>, _>>()?;
-    let shortable: BTreeSet<Symbol> = cfg
-        .universe
-        .iter()
-        .zip(&universe)
-        .filter(|(i, _)| i.shortable)
-        .map(|(_, s)| s.clone())
-        .collect();
-    let risk_free = symbol(&cfg.strategy.risk_free_symbol)?;
-    let rf_sym = risk_free.clone();
-
-    let strategy: Box<dyn Strategy> = match req.strategy.as_str() {
-        "tsmom" => Box::new(Tsmom::new(
-            TsmomParams {
-                lookback_months: cfg.strategy.lookback_months.clone(),
-                risk_free_symbol: risk_free.clone(),
-            },
-            Arc::clone(&cal),
-        )),
-        "benchmark" => Box::new(LongOnly::new(Arc::clone(&cal))),
-        other => {
-            return Err(ValidateError::Invalid(format!(
-                "unknown strategy {other:?}"
-            )))
-        }
-    };
-
-    let mut symbols = universe.clone();
-    if !symbols.contains(&risk_free) {
-        symbols.push(risk_free);
-    }
-    let view = StoreView::load(store, &symbols, &cfg.data.feed, PriceBasis::Adjusted, None)?;
-    let params = params_from_config(cfg);
+    let Setup {
+        cal,
+        universe,
+        shortable,
+        risk_free: rf_sym,
+        strategy,
+        view,
+        params,
+    } = Setup::build(store, cfg, req)?;
     let sim = SimConfig {
         start: req.from,
         end: req.to,
