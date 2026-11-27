@@ -137,7 +137,7 @@ pub fn report() -> anyhow::Result<i32> {
     let inputs = ReportInputs {
         store: &store,
         cfg: &cfg,
-        stage: wiring::stage_name(owner.stage),
+        stage: owner.stage.as_str(),
         fidelity: &[],
         validation_signoff: owner.validation_signoff.as_deref(),
         now: Utc::now(),

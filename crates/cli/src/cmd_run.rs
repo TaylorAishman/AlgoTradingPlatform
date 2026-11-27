@@ -48,7 +48,7 @@ pub fn run() -> anyhow::Result<i32> {
             keys.secret_key.expose().to_string(),
         ],
     );
-    let stage = wiring::stage_name(owner.stage);
+    let stage = owner.stage.as_str();
     let signoff = owner.validation_signoff.clone();
     let gate = Gate::new(owner);
     let params = TsmomParams {

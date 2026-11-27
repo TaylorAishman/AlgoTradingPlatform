@@ -83,17 +83,6 @@ pub fn load_owner() -> anyhow::Result<OwnerFile> {
     })
 }
 
-/// The owner-file spelling of a stage.
-pub fn stage_name(stage: Stage) -> &'static str {
-    match stage {
-        Stage::Backtest => "backtest",
-        Stage::Ingest => "ingest",
-        Stage::DryRun => "dry_run",
-        Stage::FirstOrder => "first_order",
-        Stage::Paper => "paper",
-    }
-}
-
 /// Check the owner's stage against a command's minimum stage. Returns the
 /// refusal message when the stage is too low. Reads only the owner file.
 pub fn stage_refusal(command: &str, required: Stage) -> anyhow::Result<Option<String>> {
@@ -103,8 +92,8 @@ pub fn stage_refusal(command: &str, required: Stage) -> anyhow::Result<Option<St
     }
     Ok(Some(format!(
         "`{command}` needs stage `{}` or later; the owner file grants stage `{}`",
-        stage_name(required),
-        stage_name(current)
+        required.as_str(),
+        current.as_str()
     )))
 }
 
