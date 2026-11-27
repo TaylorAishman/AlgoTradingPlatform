@@ -3,6 +3,7 @@
 use std::path::Path;
 
 use anyhow::Context;
+use clap::Args;
 use pt_core::clock::SystemClock;
 use pt_core::types::Symbol;
 use pt_gate::gate::Gate;
@@ -21,9 +22,13 @@ use crate::wiring;
 /// The version recorded with every run.
 const CODE_VERSION: &str = env!("CARGO_PKG_VERSION");
 
+/// Arguments of `run`. It takes none yet.
+#[derive(Debug, Args)]
+pub struct RunArgs {}
+
 /// Run one cycle. Exits 0 when it ends ok, 1 when it fails, 2 when it is
 /// halted and 3 when another run holds the lock.
-pub fn run() -> anyhow::Result<i32> {
+pub fn run(_args: &RunArgs) -> anyhow::Result<i32> {
     let cfg = wiring::load_config()?;
     let owner = wiring::load_owner()?;
     let keys = wiring::load_keys()?;
