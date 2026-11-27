@@ -47,7 +47,7 @@ pub struct RunOutcome {
 /// stages that allow them.
 pub fn run_cycle(ctx: &LiveContext) -> Result<RunOutcome, LiveError> {
     ctx.gate.allows(Capability::TradingRead)?;
-    let stage = stage_name(ctx.gate.stage());
+    let stage = ctx.gate.stage().as_str();
     let run_id = ctx.store.start_run(
         stage,
         &config_hash(ctx.cfg),
@@ -283,16 +283,6 @@ fn paper_phases(
     submit_planned(ctx, &auth)?;
     phases.push("submit".to_string());
     Ok(RunStatus::Ok)
-}
-
-fn stage_name(stage: Stage) -> &'static str {
-    match stage {
-        Stage::Backtest => "backtest",
-        Stage::Ingest => "ingest",
-        Stage::DryRun => "dry_run",
-        Stage::FirstOrder => "first_order",
-        Stage::Paper => "paper",
-    }
 }
 
 fn status_name(status: RunStatus) -> &'static str {
