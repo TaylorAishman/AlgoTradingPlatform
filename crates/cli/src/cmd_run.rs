@@ -3,6 +3,7 @@
 use std::path::Path;
 
 use anyhow::Context;
+use clap::Args;
 use pt_core::clock::SystemClock;
 use pt_core::types::Symbol;
 use pt_gate::gate::Gate;
@@ -11,19 +12,23 @@ use pt_live::cycle::{run_cycle, RunStatus};
 use pt_live::error::LiveError;
 use pt_live::lock::acquire_run_lock;
 use pt_ops::alert::Alerter;
-use pt_ops::report::{write_status, ReportInputs};
 use pt_shadow::{daily, slippage};
 use pt_strategy::tsmom::TsmomParams;
 
+use crate::reporting;
 use crate::strategies::StoredTsmom;
 use crate::wiring;
 
 /// The version recorded with every run.
 const CODE_VERSION: &str = env!("CARGO_PKG_VERSION");
 
+/// Arguments of `run`. It takes none yet.
+#[derive(Debug, Args)]
+pub struct RunArgs {}
+
 /// Run one cycle. Exits 0 when it ends ok, 1 when it fails, 2 when it is
 /// halted and 3 when another run holds the lock.
-pub fn run() -> anyhow::Result<i32> {
+pub fn run(_args: &RunArgs) -> anyhow::Result<i32> {
     let cfg = wiring::load_config()?;
     let owner = wiring::load_owner()?;
     let keys = wiring::load_keys()?;
@@ -78,15 +83,7 @@ pub fn run() -> anyhow::Result<i32> {
     if let Err(e) = slippage::record_slippage(&store, &cfg) {
         wiring::log("error", &format!("recording slippage failed: {e}"));
     }
-    let report = ReportInputs {
-        store: &store,
-        cfg: &cfg,
-        stage,
-        fidelity: &[],
-        validation_signoff: signoff.as_deref(),
-        now: chrono::Utc::now(),
-    };
-    if let Err(e) = write_status(&report) {
+    if let Err(e) = reporting::write_report(&store, &cfg, stage, signoff.as_deref()) {
         wiring::log("error", &format!("writing the report failed: {e}"));
     }
     let status = match outcome.status {
