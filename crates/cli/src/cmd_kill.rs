@@ -27,7 +27,7 @@ pub fn flatten(args: &ConfirmArgs) -> anyhow::Result<i32> {
     })
 }
 
-/// Require `--yes`, build the live context as `run` does, call `action` and
+/// Require `--yes`, then the keys, build the live context as `run` does, call `action` and
 /// print its count.
 fn kill_switch(
     args: &ConfirmArgs,
@@ -38,9 +38,10 @@ fn kill_switch(
         wiring::log("error", &format!("`{name}` needs --yes to confirm"));
         return Ok(1);
     }
+    // Keys come first: a missing key is reported before any config problem.
+    let keys = wiring::load_keys()?;
     let cfg = wiring::load_config()?;
     let owner = wiring::load_owner()?;
-    let keys = wiring::load_keys()?;
     let store = wiring::open_store(&cfg.run.db_path)?;
     let http = wiring::build_client()?;
     let alerter = Alerter::new(

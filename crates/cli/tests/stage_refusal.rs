@@ -76,16 +76,52 @@ fn run_in_backtest_stage_exits_four_naming_ingest() {
     assert_refused(&["run"], None, "ingest");
 }
 
-#[test]
-fn cancel_open_in_ingest_stage_exits_four_naming_first_order() {
-    // R-384
-    assert_refused(&["cancel-open", "--yes"], Some("ingest"), "first_order");
+/// Runs a kill-switch command in the live fixture (config, seeded mock and
+/// clock, fake keys) but with no owner file, so the stage is `backtest`.
+fn run_kill_without_owner(cmd: &str) -> (Output, common::live::Env) {
+    let e = common::live::env();
+    let out = Command::new(env!("CARGO_BIN_EXE_trader"))
+        .arg("--config")
+        .arg(&e.cfg)
+        .args([cmd, "--yes"])
+        .current_dir(e.dir.path())
+        .env("HOME", e.home.path())
+        .env("APCA_API_KEY_ID", "fake-key-id")
+        .env("APCA_API_SECRET_KEY", "fake-secret")
+        .env("PT_ALPACA_TRADING_URL", e.mock.url())
+        .env("PT_ALPACA_DATA_URL", e.mock.url())
+        .env_remove("PT_CONFIG")
+        .env_remove("PT_SECRETS_FILE")
+        .env_remove("PT_OWNER_FILE")
+        .output()
+        .unwrap();
+    (out, e)
 }
 
 #[test]
-fn flatten_in_ingest_stage_exits_four_naming_paper() {
-    // R-384
-    assert_refused(&["flatten", "--yes"], Some("ingest"), "paper");
+fn cancel_open_with_yes_and_no_owner_file_exits_zero() {
+    // R-384: the kill switch is forbidden in no stage.
+    let (out, _e) = run_kill_without_owner("cancel-open");
+    assert_eq!(
+        out.status.code(),
+        Some(0),
+        "stdout: {} stderr: {}",
+        stdout(&out),
+        stderr(&out)
+    );
+}
+
+#[test]
+fn flatten_with_yes_and_no_owner_file_exits_zero() {
+    // R-384: the kill switch is forbidden in no stage.
+    let (out, _e) = run_kill_without_owner("flatten");
+    assert_eq!(
+        out.status.code(),
+        Some(0),
+        "stdout: {} stderr: {}",
+        stdout(&out),
+        stderr(&out)
+    );
 }
 
 #[test]

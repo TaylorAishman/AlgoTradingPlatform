@@ -37,8 +37,6 @@ fn minimum_stage(command: &Command) -> Option<(&'static str, Stage)> {
         } => Some(("universe verify", Stage::Ingest)),
         Command::Doctor => Some(("doctor", Stage::Ingest)),
         Command::Run(_) => Some(("run", Stage::Ingest)),
-        Command::CancelOpen(_) => Some(("cancel-open", Stage::FirstOrder)),
-        Command::Flatten(_) => Some(("flatten", Stage::Paper)),
         _ => None,
     }
 }
