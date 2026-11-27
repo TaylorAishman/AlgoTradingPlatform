@@ -4,6 +4,7 @@ use chrono::{Datelike, NaiveDate, Weekday};
 use pt_data::csv_import::import_calendar_csv;
 use pt_data::error::DataError;
 use pt_store::db::Store;
+use pt_store::error::StoreError;
 
 /// 252 fake session dates: the first 252 weekdays of 2024.
 fn fake_sessions() -> Vec<NaiveDate> {
@@ -46,15 +47,21 @@ fn invalid_month_row_returns_csv_error_with_line_and_stores_nothing() {
     let text = "date\n2024-01-02\n2024-01-03\n2024-13-01\n";
     let err = import_calendar_csv(&store, text).unwrap_err();
     assert!(matches!(err, DataError::Csv { line: 4, .. }), "got {err:?}");
+    // R-447: the failed import leaves no calendar at all.
     assert!(
-        store.calendar().is_err()
-            || store
-                .calendar()
-                .unwrap()
-                .sessions_between(
-                    NaiveDate::from_ymd_opt(2024, 1, 1).unwrap(),
-                    NaiveDate::from_ymd_opt(2024, 12, 31).unwrap()
-                )
-                .is_empty()
+        matches!(store.calendar(), Err(StoreError::NotFound(_))),
+        "calendar must be NotFound after a failed import"
+    );
+}
+
+#[test]
+fn one_valid_row_then_a_bad_row_leaves_no_calendar() {
+    // R-447
+    let store = Store::open_in_memory().unwrap();
+    let text = "date\n2024-01-02\nnot-a-date\n";
+    import_calendar_csv(&store, text).unwrap_err();
+    assert!(
+        matches!(store.calendar(), Err(StoreError::NotFound(_))),
+        "calendar must be NotFound after a failed import"
     );
 }
