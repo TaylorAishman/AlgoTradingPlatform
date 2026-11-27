@@ -10,7 +10,7 @@ use pt_store::db::Store;
 use pt_validate::crosscheck::crosscheck as run_crosscheck;
 use pt_validate::error::ValidateError;
 use pt_validate::overfit::dsr_for_run;
-use pt_validate::runner::{run_and_record, BacktestRequest};
+use pt_validate::runner::{run_and_record_with, BacktestRequest, CapitalSource};
 use rust_decimal::Decimal;
 
 use crate::wiring;
@@ -29,6 +29,9 @@ pub enum BacktestCmd {
         /// Strategy name (default from the config)
         #[arg(long)]
         strategy: Option<String>,
+        /// Starting capital (default from the config)
+        #[arg(long)]
+        capital: Option<Decimal>,
     },
     /// Compare the event and vector engines
     Crosscheck {
@@ -43,7 +46,12 @@ pub enum BacktestCmd {
 
 pub fn backtest(action: &BacktestCmd) -> anyhow::Result<i32> {
     match action {
-        BacktestCmd::Run { from, to, strategy } => run(from, to, strategy.as_deref()),
+        BacktestCmd::Run {
+            from,
+            to,
+            strategy,
+            capital,
+        } => run(from, to, strategy.as_deref(), *capital),
         BacktestCmd::Crosscheck {
             from,
             to,
@@ -66,13 +74,26 @@ fn family(strategy: &str) -> &str {
     }
 }
 
-fn run(from: &str, to: &str, strategy: Option<&str>) -> anyhow::Result<i32> {
+fn run(
+    from: &str,
+    to: &str,
+    strategy: Option<&str>,
+    capital: Option<Decimal>,
+) -> anyhow::Result<i32> {
     let cfg = wiring::load_config()?;
+    let (initial_capital, source) = match capital {
+        Some(c) if c <= Decimal::ZERO => {
+            eprintln!("--capital must be greater than zero");
+            return Ok(1);
+        }
+        Some(c) => (c, CapitalSource::Flag),
+        None => (Decimal::new(INITIAL_CAPITAL, 0), CapitalSource::Config),
+    };
     let req = BacktestRequest {
         strategy: strategy.unwrap_or("tsmom").to_string(),
         from: date("--from", from)?,
         to: date("--to", to)?,
-        initial_capital: Decimal::new(INITIAL_CAPITAL, 0),
+        initial_capital,
     };
     let path = Path::new(&cfg.run.db_path);
     if let Some(parent) = path.parent().filter(|p| !p.as_os_str().is_empty()) {
@@ -80,10 +101,12 @@ fn run(from: &str, to: &str, strategy: Option<&str>) -> anyhow::Result<i32> {
             .with_context(|| format!("creating {}", parent.display()))?;
     }
     let store = Store::open(path).with_context(|| format!("opening store {}", path.display()))?;
-    let out = run_and_record(&store, &cfg, &req, &SystemClock)?;
+    let out = run_and_record_with(&store, &cfg, &req, source, &SystemClock)?;
     let dsr = dsr_for_run(&store, &cfg, out.run_id, family(&req.strategy))?;
     let m = &out.metrics;
     println!("run {}", out.run_id);
+    println!("capital {}", initial_capital.normalize());
+    println!("source {}", source.as_str());
     println!("trial {}", out.trial_hash);
     println!("sharpe {}", m.sharpe);
     println!("cagr {}", m.cagr);
