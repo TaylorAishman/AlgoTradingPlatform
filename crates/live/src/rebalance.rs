@@ -121,9 +121,11 @@ pub fn rebalance(ctx: &LiveContext, wire_clock: &WireClock) -> Result<RebalanceO
     let mut universe = Vec::new();
     let mut shortable = BTreeSet::new();
     let mut untradable = Vec::new();
+    let mut no_snapshot = Vec::new();
     for inst in &ctx.cfg.universe {
         let symbol = symbol(&inst.symbol)?;
         let Some(asset) = ctx.store.asset_asof(&symbol, None)? else {
+            no_snapshot.push(symbol);
             continue;
         };
         if !asset.tradable {
@@ -205,28 +207,6 @@ pub fn rebalance(ctx: &LiveContext, wire_clock: &WireClock) -> Result<RebalanceO
         })?;
         return Ok(RebalanceOutcome::SkippedLate);
     }
-    let decision_id = ctx.store.insert_decision(&DecisionRow {
-        id: 0,
-        strategy_id: ctx.strategy.id().to_string(),
-        signal_date: due.signal_date,
-        trade_date: Some(trade_date),
-        mode,
-        status: "planned".to_string(),
-        inputs_json: record_to_json(&record),
-        outputs_json: decision_to_json(&decision),
-        created_at: now,
-    })?;
-    // After the decision is stored, so a rerun (which returns above) or a
-    // data-not-ready retry never repeats an alert for the same decision.
-    for symbol in &untradable {
-        ctx.store.record_alert(
-            "warn",
-            "not_tradable",
-            &format!("{symbol} is not tradable; left out of the universe"),
-            false,
-            now,
-        )?;
-    }
     let orders: Vec<PlannedOrder> = decision
         .orders
         .iter()
@@ -237,7 +217,41 @@ pub fn rebalance(ctx: &LiveContext, wire_clock: &WireClock) -> Result<RebalanceO
             reference_price: o.reference_price.value(),
         })
         .collect();
-    write_orders(ctx, decision_id, due.signal_date, trade_date, &orders, dry)?;
+    let rows = order_rows(ctx, due.signal_date, trade_date, &orders, dry);
+    let decision_id = ctx.store.insert_decision_with_orders(
+        &DecisionRow {
+            id: 0,
+            strategy_id: ctx.strategy.id().to_string(),
+            signal_date: due.signal_date,
+            trade_date: Some(trade_date),
+            mode,
+            status: "planned".to_string(),
+            inputs_json: record_to_json(&record),
+            outputs_json: decision_to_json(&decision),
+            created_at: now,
+        },
+        &rows,
+    )?;
+    // After the decision is stored, so a rerun (which returns above) or a
+    // data-not-ready retry never repeats an alert for the same decision.
+    for symbol in &no_snapshot {
+        ctx.store.record_alert(
+            "warn",
+            "asset_missing",
+            &format!("{symbol} has no stored asset snapshot; left out of the universe"),
+            false,
+            now,
+        )?;
+    }
+    for symbol in &untradable {
+        ctx.store.record_alert(
+            "warn",
+            "not_tradable",
+            &format!("{symbol} is not tradable; left out of the universe"),
+            false,
+            now,
+        )?;
+    }
     Ok(RebalanceOutcome::Recorded {
         decision_id,
         orders: decision.orders.len(),
@@ -252,13 +266,46 @@ struct PlannedOrder {
     reference_price: Decimal,
 }
 
-/// Writes each planned order as a row of the decision: `Intent` with the
-/// canonical client order id, or when `dry` is set `DryRun` with that id
-/// prefixed `dry-`, so a dry-run row never takes the id the paper order will
-/// send and adopt by. The store has no transaction spanning calls, so each
-/// order is its own atomic write; an order whose deterministic client order id
-/// is already stored counts as written, so a rerun after a partial write
-/// completes the set without duplicating any order.
+/// The rows for planned orders: `Intent` with the canonical client order id,
+/// or when `dry` is set `DryRun` with that id prefixed `dry-`, so a dry-run row
+/// never takes the id the paper order will send and adopt by.
+fn order_rows(
+    ctx: &LiveContext,
+    signal_date: NaiveDate,
+    trade_date: NaiveDate,
+    orders: &[PlannedOrder],
+    dry: bool,
+) -> Vec<OrderRow> {
+    orders
+        .iter()
+        .map(|o| {
+            let id = client_order_id(ctx.strategy.id(), signal_date, o.symbol.as_str(), 1);
+            OrderRow {
+                client_order_id: if dry { format!("dry-{id}") } else { id },
+                decision_id: None,
+                symbol: o.symbol.clone(),
+                side: o.side,
+                qty: o.qty,
+                leg: 1,
+                state: if dry {
+                    OrderState::DryRun
+                } else {
+                    OrderState::Intent
+                },
+                broker_order_id: None,
+                filled_qty: 0,
+                reference_price: o.reference_price,
+                trade_date,
+            }
+        })
+        .collect()
+}
+
+/// Writes the orders a stored decision is missing, for a run that stopped
+/// after recording the decision. A new decision and its orders are written
+/// together by `insert_decision_with_orders`; here each order is its own
+/// atomic write, and an order whose deterministic client order id is already
+/// stored counts as written, so a rerun completes the set without duplicates.
 fn write_orders(
     ctx: &LiveContext,
     decision_id: i64,
@@ -267,26 +314,11 @@ fn write_orders(
     orders: &[PlannedOrder],
     dry: bool,
 ) -> Result<(), LiveError> {
-    for o in orders {
-        let id = client_order_id(ctx.strategy.id(), signal_date, o.symbol.as_str(), 1);
-        let res = ctx.store.insert_order(&OrderRow {
-            client_order_id: if dry { format!("dry-{id}") } else { id },
+    for row in order_rows(ctx, signal_date, trade_date, orders, dry) {
+        match ctx.store.insert_order(&OrderRow {
             decision_id: Some(decision_id),
-            symbol: o.symbol.clone(),
-            side: o.side,
-            qty: o.qty,
-            leg: 1,
-            state: if dry {
-                OrderState::DryRun
-            } else {
-                OrderState::Intent
-            },
-            broker_order_id: None,
-            filled_qty: 0,
-            reference_price: o.reference_price,
-            trade_date,
-        });
-        match res {
+            ..row
+        }) {
             Ok(()) | Err(StoreError::Duplicate(_)) => {}
             Err(e) => return Err(e.into()),
         }
