@@ -4,13 +4,14 @@ use std::path::Path;
 
 use anyhow::Context;
 use clap::Args;
-use pt_core::clock::SystemClock;
+use pt_core::clock::{Clock, SystemClock};
 use pt_core::types::Symbol;
 use pt_gate::gate::Gate;
 use pt_live::context::LiveContext;
 use pt_live::cycle::{run_cycle, RunStatus};
 use pt_live::error::LiveError;
 use pt_live::lock::acquire_run_lock;
+use pt_live::slots::slot_due;
 use pt_ops::alert::Alerter;
 use pt_shadow::{daily, slippage};
 use pt_strategy::tsmom::TsmomParams;
@@ -22,17 +23,21 @@ use crate::wiring;
 /// The version recorded with every run.
 const CODE_VERSION: &str = env!("CARGO_PKG_VERSION");
 
-/// Arguments of `run`. It takes none yet.
+/// Arguments of `run`.
 #[derive(Debug, Args)]
-pub struct RunArgs {}
+pub struct RunArgs {
+    /// Do nothing and exit 0 unless a weekday run slot has passed since the
+    /// last started run.
+    #[arg(long)]
+    pub if_due: bool,
+}
 
 /// Run one cycle. Exits 0 when it ends ok, 1 when it fails, 2 when it is
 /// halted and 3 when another run holds the lock.
-pub fn run(_args: &RunArgs) -> anyhow::Result<i32> {
+pub fn run(args: &RunArgs) -> anyhow::Result<i32> {
     let cfg = wiring::load_config()?;
     let owner = wiring::load_owner()?;
     let keys = wiring::load_keys()?;
-    let store = wiring::open_store(&cfg.run.db_path)?;
     let _lock = match acquire_run_lock(Path::new(&cfg.run.db_path)) {
         Ok(lock) => lock,
         Err(LiveError::AlreadyRunning) => {
@@ -44,6 +49,14 @@ pub fn run(_args: &RunArgs) -> anyhow::Result<i32> {
         }
         Err(e) => return Err(e.into()),
     };
+    let store = wiring::open_store(&cfg.run.db_path)?;
+    if args.if_due {
+        let last = store.runs()?.iter().map(|r| r.started_at).max();
+        if !slot_due(last, SystemClock.now_utc()) {
+            wiring::log("info", "not due: no run slot has passed since the last run");
+            return Ok(0);
+        }
+    }
     let http = wiring::build_client()?;
 
     let alerter = Alerter::new(
@@ -74,7 +87,12 @@ pub fn run(_args: &RunArgs) -> anyhow::Result<i32> {
         strategy: &strategy,
         code_version: CODE_VERSION,
     };
-    let outcome = run_cycle(&ctx)?;
+    // A cycle that errors still gets its report; the error is logged and the
+    // run exits 1.
+    let cycle = run_cycle(&ctx);
+    if let Err(e) = &cycle {
+        wiring::log("error", &format!("the cycle failed: {e}"));
+    }
     // Still holding the lock: compare with the shadow, then write the report.
     // A failure here is logged and does not change the cycle's exit code.
     if let Err(e) = daily::update(&store, &cfg) {
@@ -86,6 +104,10 @@ pub fn run(_args: &RunArgs) -> anyhow::Result<i32> {
     if let Err(e) = reporting::write_report(&store, &cfg, stage, signoff.as_deref()) {
         wiring::log("error", &format!("writing the report failed: {e}"));
     }
+    let outcome = match cycle {
+        Ok(outcome) => outcome,
+        Err(_) => return Ok(1),
+    };
     let status = match outcome.status {
         RunStatus::Ok => "ok",
         RunStatus::Halted => "halted",

@@ -86,3 +86,27 @@ fn run_succeeds_again_once_the_lock_is_released() {
     );
     assert_eq!(posts(&e).len(), 2);
 }
+
+#[test]
+fn a_refused_run_creates_no_database_file() {
+    // R-534: the lock is taken before the store is opened.
+    let e = env();
+    let db = db_path(&e);
+    assert!(!db.exists(), "the fixture already has a database");
+    let held = pt_live::lock::acquire_run_lock(&db).unwrap();
+    let out = run(&e, &["run"]);
+    assert_eq!(
+        out.status.code(),
+        Some(3),
+        "stdout: {} stderr: {}",
+        stdout(&out),
+        stderr(&out)
+    );
+    for suffix in ["", "-wal", "-shm"] {
+        let mut name = db.as_os_str().to_owned();
+        name.push(suffix);
+        let p = PathBuf::from(name);
+        assert!(!p.exists(), "{} was created", p.display());
+    }
+    drop(held);
+}
