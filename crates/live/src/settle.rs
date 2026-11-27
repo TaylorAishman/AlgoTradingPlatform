@@ -4,7 +4,7 @@
 //! Fills come from the FILL activities, keyed by activity id (D-19), so
 //! reading the same activity again records nothing more.
 
-use std::collections::{HashMap, HashSet};
+use std::collections::HashMap;
 
 use chrono::{NaiveTime, TimeZone, Utc};
 use pt_alpaca::activities::{fill_activities, WireFill};
@@ -50,13 +50,6 @@ pub fn settle(ctx: &LiveContext) -> Result<SettleReport, LiveError> {
     };
     let after = Utc.from_utc_datetime(&earliest.and_time(NaiveTime::MIN));
     let activities = fill_activities(ctx.http, after)?;
-    let mut ledgered: HashSet<String> = ctx
-        .store
-        .ledger(Book::Paper)?
-        .into_iter()
-        .filter(|e| e.kind == "fill")
-        .filter_map(|e| e.ref_id)
-        .collect();
     let mut stored: HashMap<String, u64> = HashMap::new();
     for f in ctx.store.fills()? {
         *stored.entry(f.broker_order_id).or_default() += f.qty;
@@ -75,7 +68,7 @@ pub fn settle(ctx: &LiveContext) -> Result<SettleReport, LiveError> {
             Err(e) => return Err(e),
         };
         for fill in activities.iter().filter(|f| f.order_id == wire.id) {
-            if record_fill(ctx, &row, fill, &mut ledgered)? {
+            if record_fill(ctx, &row, fill)? {
                 report.fills_recorded += 1;
                 *stored.entry(fill.order_id.clone()).or_default() += fill.qty;
             }
@@ -217,16 +210,15 @@ fn supported(
     }
 }
 
-/// Stores one fill of `row` and its Paper ledger entry, dated by the fill's
-/// UTC date. Returns true when the fill row is new. A fill already stored
-/// whose ledger entry is missing gets the entry, so the two stay paired.
-fn record_fill(
-    ctx: &LiveContext,
-    row: &OrderRow,
-    fill: &WireFill,
-    ledgered: &mut HashSet<String>,
-) -> Result<bool, LiveError> {
-    let inserted = ctx.store.insert_fill(&FillRow {
+/// Stores one fill of `row` and its Paper ledger entry in one transaction,
+/// the ledger entry dated by the fill's UTC date. Returns true when the fill
+/// is new. Every conversion that can fail happens before the write, so an
+/// error stores nothing.
+fn record_fill(ctx: &LiveContext, row: &OrderRow, fill: &WireFill) -> Result<bool, LiveError> {
+    let qty = i64::try_from(fill.qty)
+        .map_err(|_| LiveError::Invalid(format!("fill quantity {} too large", fill.qty)))?
+        * row.side.sign();
+    let fill_row = FillRow {
         activity_id: fill.id.clone(),
         broker_order_id: fill.order_id.clone(),
         symbol: row.symbol.clone(),
@@ -234,22 +226,16 @@ fn record_fill(
         qty: fill.qty,
         price: fill.price,
         at: fill.transaction_time,
-    })?;
-    if !ledgered.contains(&fill.id) {
-        let qty = i64::try_from(fill.qty)
-            .map_err(|_| LiveError::Invalid(format!("fill quantity {} too large", fill.qty)))?
-            * row.side.sign();
-        ctx.store.append_ledger(&LedgerEntry {
-            book: Book::Paper,
-            date: fill.transaction_time.date_naive(),
-            kind: "fill".to_string(),
-            symbol: Some(row.symbol.clone()),
-            qty,
-            price: Some(fill.price),
-            cash_delta: -(Decimal::from(qty) * fill.price),
-            ref_id: Some(fill.id.clone()),
-        })?;
-        ledgered.insert(fill.id.clone());
-    }
-    Ok(inserted)
+    };
+    let entry = LedgerEntry {
+        book: Book::Paper,
+        date: fill.transaction_time.date_naive(),
+        kind: "fill".to_string(),
+        symbol: Some(row.symbol.clone()),
+        qty,
+        price: Some(fill.price),
+        cash_delta: -(Decimal::from(qty) * fill.price),
+        ref_id: Some(fill.id.clone()),
+    };
+    Ok(ctx.store.record_fill(&fill_row, &entry)?)
 }
