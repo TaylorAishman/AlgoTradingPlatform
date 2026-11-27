@@ -87,7 +87,9 @@ pub struct FlattenReport {
 ///
 /// The stored row for that id decides what happens. A `Submitted` or
 /// `PartiallyFilled` row is still working at the broker, so nothing is sent.
-/// A row in any other state but `Intent` (rejected, filled, cancelled, ...) is
+/// A `Rejected` row whose order the broker nevertheless kept is adopted: the
+/// row becomes `Submitted` with the broker's id, nothing is sent and it counts
+/// as accepted. A row in any other state but `Intent` (filled, cancelled, ...) is
 /// spent, so a retry uses the next free id `<id>-r1`, `<id>-r2`, ... and never
 /// reuses a spent one. With no row or an `Intent` row, an order the broker
 /// already holds (an earlier flatten today) is adopted: the row is marked
@@ -127,17 +129,39 @@ pub fn flatten(ctx: &LiveContext) -> Result<FlattenReport, LiveError> {
     for p in held {
         let base = flatten_order_id(today, &p.symbol);
         let (mut client_order_id, mut retry) = (base.clone(), 0);
+        let mut adopted = false;
         let stored = loop {
             let row = ctx.store.order(&client_order_id)?;
             match row.as_ref().map(|r| r.state) {
                 None | Some(OrderState::Intent) => break row,
                 Some(OrderState::Submitted | OrderState::PartiallyFilled) => break row,
+                Some(OrderState::Rejected) => {
+                    // The broker may have kept the order it answered with a
+                    // reject: adopt it rather than send a second one.
+                    if let Some(held) = order_by_client_id(ctx.http, &client_order_id)? {
+                        ctx.store.set_order_state(
+                            &client_order_id,
+                            OrderState::Submitted,
+                            0,
+                            Some(&held.id),
+                            ctx.clock.now_utc(),
+                        )?;
+                        adopted = true;
+                        break row;
+                    }
+                    retry += 1;
+                    client_order_id = format!("{base}-r{retry}");
+                }
                 Some(_) => {
                     retry += 1;
                     client_order_id = format!("{base}-r{retry}");
                 }
             }
         };
+        if adopted {
+            placed += 1;
+            continue;
+        }
         if stored
             .as_ref()
             .is_some_and(|r| r.state != OrderState::Intent)
