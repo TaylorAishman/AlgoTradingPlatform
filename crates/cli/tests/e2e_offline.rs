@@ -47,44 +47,6 @@ fn weekdays() -> Vec<NaiveDate> {
     out
 }
 
-/// Bars for every symbol and weekday; prices in integer cents from a fixed-seed
-/// linear congruential generator (daily moves of -2% to +2%, BIL +0.01%).
-fn bars_csv(days: &[NaiveDate]) -> String {
-    let mut out = String::from("symbol,date,open,high,low,close,volume\n");
-    for (i, sym) in SYMBOLS.iter().enumerate() {
-        let mut state: u64 = 1_000 + i as u64;
-        let mut prev: i64 = 10_000;
-        for d in days {
-            state = state
-                .wrapping_mul(6_364_136_223_846_793_005)
-                .wrapping_add(1_442_695_040_888_963_407);
-            let bp: i64 = if *sym == "BIL" {
-                1
-            } else {
-                ((state >> 33) % 4001) as i64 - 2000
-            };
-            let close = (prev * (10_000 + bp) + 5_000) / 10_000;
-            let hi = prev.max(close);
-            let lo = prev.min(close);
-            writeln!(
-                out,
-                "{sym},{d},{}.{:02},{}.{:02},{}.{:02},{}.{:02},1000000",
-                prev / 100,
-                prev % 100,
-                hi / 100,
-                hi % 100,
-                lo / 100,
-                lo % 100,
-                close / 100,
-                close % 100
-            )
-            .unwrap();
-            prev = close;
-        }
-    }
-    out
-}
-
 #[test]
 fn offline_research_path_exits_zero_at_every_step_and_writes_status_json() {
     // R-393
@@ -121,7 +83,7 @@ fn offline_research_path_exits_zero_at_every_step_and_writes_status_json() {
     let cal_path = dir.path().join("cal.csv");
     std::fs::write(&cal_path, cal).unwrap();
     let bars_path = dir.path().join("bars.csv");
-    std::fs::write(&bars_path, bars_csv(&days)).unwrap();
+    std::fs::write(&bars_path, common::offline::bars_csv(&days)).unwrap();
     let (cal_s, bars_s) = (s(&cal_path), s(&bars_path));
 
     let steps: Vec<Vec<&str>> = vec![

@@ -56,7 +56,11 @@ fn env(skip: (&str, &str)) -> Env {
     assert_eq!(out.status.code(), Some(0), "stderr: {}", stderr(&out));
 
     let bars_path = e.dir.path().join("bars.csv");
-    std::fs::write(&bars_path, bars_csv(&days, skip)).unwrap();
+    std::fs::write(
+        &bars_path,
+        without_bar(&common::offline::bars_csv(&days), skip),
+    )
+    .unwrap();
     for adj in ["all", "raw"] {
         let out = run(
             &e,
@@ -108,46 +112,13 @@ fn weekdays() -> Vec<NaiveDate> {
     out
 }
 
-/// Bars for every symbol and weekday; prices in integer cents from a fixed-seed
-/// linear congruential generator (daily moves of -2% to +2%, BIL +0.01%).
-fn bars_csv(days: &[NaiveDate], skip: (&str, &str)) -> String {
-    let mut out = String::from("symbol,date,open,high,low,close,volume\n");
-    for (i, sym) in SYMBOLS.iter().enumerate() {
-        let mut state: u64 = 1_000 + i as u64;
-        let mut prev: i64 = 10_000;
-        for d in days {
-            state = state
-                .wrapping_mul(6_364_136_223_846_793_005)
-                .wrapping_add(1_442_695_040_888_963_407);
-            let bp: i64 = if *sym == "BIL" {
-                1
-            } else {
-                ((state >> 33) % 4001) as i64 - 2000
-            };
-            let close = (prev * (10_000 + bp) + 5_000) / 10_000;
-            let hi = prev.max(close);
-            let lo = prev.min(close);
-            if *sym == skip.0 && d.to_string() == skip.1 {
-                prev = close;
-                continue;
-            }
-            writeln!(
-                out,
-                "{sym},{d},{}.{:02},{}.{:02},{}.{:02},{}.{:02},1000000",
-                prev / 100,
-                prev % 100,
-                hi / 100,
-                hi % 100,
-                lo / 100,
-                lo % 100,
-                close / 100,
-                close % 100
-            )
-            .unwrap();
-            prev = close;
-        }
-    }
-    out
+/// Drops the one bar line for `skip` (symbol, date) from a bars CSV.
+fn without_bar(csv: &str, skip: (&str, &str)) -> String {
+    let prefix = format!("{},{},", skip.0, skip.1);
+    csv.lines()
+        .filter(|l| !l.starts_with(&prefix))
+        .map(|l| format!("{l}\n"))
+        .collect()
 }
 
 #[test]
