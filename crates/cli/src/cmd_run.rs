@@ -74,7 +74,12 @@ pub fn run(_args: &RunArgs) -> anyhow::Result<i32> {
         strategy: &strategy,
         code_version: CODE_VERSION,
     };
-    let outcome = run_cycle(&ctx)?;
+    // A cycle that errors still gets its report; the error is logged and the
+    // run exits 1.
+    let cycle = run_cycle(&ctx);
+    if let Err(e) = &cycle {
+        wiring::log("error", &format!("the cycle failed: {e}"));
+    }
     // Still holding the lock: compare with the shadow, then write the report.
     // A failure here is logged and does not change the cycle's exit code.
     if let Err(e) = daily::update(&store, &cfg) {
@@ -86,6 +91,10 @@ pub fn run(_args: &RunArgs) -> anyhow::Result<i32> {
     if let Err(e) = reporting::write_report(&store, &cfg, stage, signoff.as_deref()) {
         wiring::log("error", &format!("writing the report failed: {e}"));
     }
+    let outcome = match cycle {
+        Ok(outcome) => outcome,
+        Err(_) => return Ok(1),
+    };
     let status = match outcome.status {
         RunStatus::Ok => "ok",
         RunStatus::Halted => "halted",

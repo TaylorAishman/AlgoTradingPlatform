@@ -81,3 +81,40 @@ fn an_active_halt_exits_two_and_the_report_lists_it() {
     assert_eq!(halts[0]["reason"], "manual");
     assert_eq!(halts[0]["detail"], "holiday");
 }
+
+fn generated_at(e: &Env) -> chrono::DateTime<chrono::Utc> {
+    status_json(e)["generated_at"]
+        .as_str()
+        .expect("generated_at is a string")
+        .parse()
+        .expect("generated_at is a timestamp")
+}
+
+#[test]
+fn the_report_is_rewritten_when_the_run_log_cannot_be_written() {
+    // R-535: the database is read-only, so the cycle fails; the report is
+    // still written, and the run exits 1.
+    let e = env();
+    let first = run(&e, &["run"]);
+    assert_eq!(first.status.code(), Some(0), "stderr: {}", stderr(&first));
+    let before = generated_at(&e);
+
+    let db = e.dir.path().join("test.sqlite");
+    let mut perms = std::fs::metadata(&db).unwrap().permissions();
+    perms.set_readonly(true);
+    std::fs::set_permissions(&db, perms).unwrap();
+
+    let out = run(&e, &["run"]);
+    assert_eq!(
+        out.status.code(),
+        Some(1),
+        "stdout: {} stderr: {}",
+        stdout(&out),
+        stderr(&out)
+    );
+    let after = generated_at(&e);
+    assert!(
+        after > before,
+        "generated_at did not advance: {before} -> {after}"
+    );
+}
