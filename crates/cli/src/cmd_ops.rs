@@ -1,35 +1,19 @@
-//! `halt`, `cancel-open`, `flatten`, `report`, `status` and `signoff` commands (stubs).
+//! `halt`, `report`, `status` and `signoff` commands (stubs).
 
 use std::path::Path;
 use std::sync::Arc;
 
 use anyhow::Context;
 use chrono::Utc;
-use pt_calendar::calendar::TradingCalendar;
-use pt_core::clock::SystemClock;
 use pt_core::types::Symbol;
-use pt_gate::gate::Gate;
-use pt_live::context::LiveContext;
-use pt_live::error::LiveError;
-use pt_ops::alert::Alerter;
 use pt_ops::report::{last_ok_run_age_hours, write_status, ReportInputs};
 use pt_shadow::fidelity::{fidelity, Fidelity};
 use pt_shadow::signoff::{evaluate, write_signoff, Verdict};
-use pt_store::db::Store;
 use pt_store::error::StoreError;
 use pt_strategy::tsmom::{Tsmom, TsmomParams};
 
-use crate::cli::{ConfirmArgs, HaltCmd, SignoffCmd};
+use crate::cli::{HaltCmd, SignoffCmd};
 use crate::wiring;
-
-fn open_store(db_path: &str) -> anyhow::Result<Store> {
-    let path = Path::new(db_path);
-    if let Some(parent) = path.parent().filter(|p| !p.as_os_str().is_empty()) {
-        std::fs::create_dir_all(parent)
-            .with_context(|| format!("creating {}", parent.display()))?;
-    }
-    Store::open(path).with_context(|| format!("opening store {}", path.display()))
-}
 
 /// Inspect or change halts. No stage is required and no request is made.
 ///
@@ -37,7 +21,7 @@ fn open_store(db_path: &str) -> anyhow::Result<Store> {
 /// exit 0, and `clear` of an unknown or already cleared id exits 1.
 pub fn halt(action: &HaltCmd) -> anyhow::Result<i32> {
     let cfg = wiring::load_config()?;
-    let store = open_store(&cfg.run.db_path)?;
+    let store = wiring::open_store(&cfg.run.db_path)?;
     match action {
         HaltCmd::Status => {
             let active = store.active_halts()?;
@@ -77,71 +61,6 @@ pub fn halt(action: &HaltCmd) -> anyhow::Result<i32> {
     }
 }
 
-/// Cancel every open order at the broker and print how many cancels were sent.
-/// Exits 1 without `--yes`, before any client is built.
-pub fn cancel_open(args: &ConfirmArgs) -> anyhow::Result<i32> {
-    kill_switch(args, "cancel-open", pt_live::killswitch::cancel_open)
-}
-
-/// Close every position and halt, printing how many orders were sent.
-/// Exits 1 without `--yes`, before any client is built. Works while halted.
-pub fn flatten(args: &ConfirmArgs) -> anyhow::Result<i32> {
-    kill_switch(args, "flatten", pt_live::killswitch::flatten)
-}
-
-/// Require `--yes`, build the live context as `run` does, call `action` and
-/// print its count.
-fn kill_switch(
-    args: &ConfirmArgs,
-    name: &str,
-    action: fn(&LiveContext) -> Result<usize, LiveError>,
-) -> anyhow::Result<i32> {
-    if !args.yes {
-        wiring::log("error", &format!("`{name}` needs --yes to confirm"));
-        return Ok(1);
-    }
-    let cfg = wiring::load_config()?;
-    let owner = wiring::load_owner()?;
-    let keys = wiring::load_keys()?;
-    let store = open_store(&cfg.run.db_path)?;
-    let http = wiring::build_client()?;
-    let alerter = Alerter::new(
-        std::env::var("PT_ALERT_WEBHOOK_URL")
-            .ok()
-            .filter(|u| !u.is_empty())
-            .or_else(|| owner.alert_webhook_url.clone()),
-        vec![
-            keys.key_id.expose().to_string(),
-            keys.secret_key.expose().to_string(),
-        ],
-    );
-    let gate = Gate::new(owner);
-    // The kill switch only needs the strategy's id; the calendar is unused.
-    let placeholder = TradingCalendar::new(vec![cfg.data.start]).context("strategy calendar")?;
-    let strategy = Tsmom::new(
-        TsmomParams {
-            lookback_months: cfg.strategy.lookback_months.clone(),
-            risk_free_symbol: Symbol::new(&cfg.strategy.risk_free_symbol)
-                .context("strategy.risk_free_symbol")?,
-        },
-        Arc::new(placeholder),
-    );
-    let clock = SystemClock;
-    let ctx = LiveContext {
-        store: &store,
-        cfg: &cfg,
-        gate: &gate,
-        http: &http,
-        clock: &clock,
-        alerter: &alerter,
-        strategy: &strategy,
-        code_version: env!("CARGO_PKG_VERSION"),
-    };
-    let n = action(&ctx)?;
-    println!("{n}");
-    Ok(0)
-}
-
 /// Write `status.md` and `status.json` from the store. Needs no network.
 ///
 /// The fidelity section is left empty: computing it needs the strategy, which
@@ -149,11 +68,11 @@ fn kill_switch(
 pub fn report() -> anyhow::Result<i32> {
     let cfg = wiring::load_config()?;
     let owner = wiring::load_owner()?;
-    let store = open_store(&cfg.run.db_path)?;
+    let store = wiring::open_store(&cfg.run.db_path)?;
     let inputs = ReportInputs {
         store: &store,
         cfg: &cfg,
-        stage: wiring::stage_name(owner.stage),
+        stage: owner.stage.as_str(),
         fidelity: &[],
         validation_signoff: owner.validation_signoff.as_deref(),
         now: Utc::now(),
@@ -168,7 +87,7 @@ pub fn report() -> anyhow::Result<i32> {
 /// Without a limit, only the existence of an `ok` run is checked.
 pub fn status(max_age_hours: Option<u64>) -> anyhow::Result<i32> {
     let cfg = wiring::load_config()?;
-    let store = open_store(&cfg.run.db_path)?;
+    let store = wiring::open_store(&cfg.run.db_path)?;
     match last_ok_run_age_hours(&store, Utc::now())? {
         None => {
             wiring::log("error", "no successful run has finished");
@@ -205,7 +124,7 @@ pub fn signoff(action: &SignoffCmd) -> anyhow::Result<i32> {
 
 fn signoff_report() -> anyhow::Result<i32> {
     let cfg = wiring::load_config()?;
-    let store = open_store(&cfg.run.db_path)?;
+    let store = wiring::open_store(&cfg.run.db_path)?;
     let f = match store.calendar() {
         // No calendar means nothing has been stored: the sample is empty.
         Err(StoreError::NotFound(_)) => Fidelity {

@@ -13,16 +13,6 @@ use pt_store::db::Store;
 use crate::cli::DataCmd;
 use crate::wiring;
 
-fn open_store() -> anyhow::Result<Store> {
-    let cfg = wiring::load_config()?;
-    let path = Path::new(&cfg.run.db_path);
-    if let Some(parent) = path.parent().filter(|p| !p.as_os_str().is_empty()) {
-        std::fs::create_dir_all(parent)
-            .with_context(|| format!("creating {}", parent.display()))?;
-    }
-    Store::open(path).with_context(|| format!("opening store {}", path.display()))
-}
-
 fn read_csv(csv: &Path) -> anyhow::Result<String> {
     std::fs::read_to_string(csv).with_context(|| format!("reading {}", csv.display()))
 }
@@ -30,7 +20,7 @@ fn read_csv(csv: &Path) -> anyhow::Result<String> {
 /// Import trading sessions from a CSV file. Needs no keys and no network.
 pub fn calendar_import(csv: &Path) -> anyhow::Result<i32> {
     let text = read_csv(csv)?;
-    let store = open_store()?;
+    let store = wiring::open_store(&wiring::load_config()?.run.db_path)?;
     let n = import_calendar_csv(&store, &text)?;
     println!("imported {n} sessions");
     Ok(0)
@@ -49,7 +39,7 @@ pub fn data(action: &DataCmd) -> anyhow::Result<i32> {
                 other => return Err(anyhow!("unknown adjustment {other:?}: use raw or all")),
             };
             let text = read_csv(csv)?;
-            let store = open_store()?;
+            let store = wiring::open_store(&wiring::load_config()?.run.db_path)?;
             let n = import_bars_csv(&store, &text, adjustment, source, chrono::Utc::now())?;
             println!("imported {n} bars");
             Ok(0)
@@ -64,7 +54,7 @@ pub fn data(action: &DataCmd) -> anyhow::Result<i32> {
 /// today, as `SYMBOL DATE` lines. Exits 1 when there is any (R-126, R-383).
 fn check() -> anyhow::Result<i32> {
     let cfg = wiring::load_config()?;
-    let store = open_store()?;
+    let store = wiring::open_store(&wiring::load_config()?.run.db_path)?;
     let calendar = store.calendar().context("reading the calendar")?;
     let today = chrono::Utc::now().date_naive();
     let Some(through) = calendar
@@ -100,7 +90,7 @@ fn broker_today(http: &pt_alpaca::http::HttpClient) -> anyhow::Result<(chrono::N
 /// date and store it.
 pub fn calendar_sync() -> anyhow::Result<i32> {
     let cfg = wiring::load_config()?;
-    let store = open_store()?;
+    let store = wiring::open_store(&wiring::load_config()?.run.db_path)?;
     let http = wiring::build_client()?;
     let (today, _) = broker_today(&http)?;
     let n = sync_calendar(&store, &http, cfg.data.start, today)?;
@@ -136,7 +126,7 @@ fn through_date(
 /// `SYMBOL PASS|FAIL reasons` line each. Exits 1 if any symbol fails.
 pub fn universe_verify() -> anyhow::Result<i32> {
     let cfg = wiring::load_config()?;
-    let store = open_store()?;
+    let store = wiring::open_store(&wiring::load_config()?.run.db_path)?;
     let http = wiring::build_client()?;
     let through = through_date(&store, &http)?;
     let checks = pt_data::universe::verify_universe(&store, &http, &cfg, through)?;
@@ -155,7 +145,7 @@ pub fn universe_verify() -> anyhow::Result<i32> {
 /// Fetch raw and adjusted bars through the expected last session.
 fn data_ingest() -> anyhow::Result<i32> {
     let cfg = wiring::load_config()?;
-    let store = open_store()?;
+    let store = wiring::open_store(&wiring::load_config()?.run.db_path)?;
     let http = wiring::build_client()?;
     let through = through_date(&store, &http)?;
     let report = ingest(&store, &http, &cfg, through, chrono::Utc::now())?;

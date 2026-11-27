@@ -3,7 +3,6 @@
 use crate::cli::{CalendarCmd, ConfigCmd, UniverseCmd};
 use chrono::NaiveDate;
 use pt_core::types::{Adjustment, Symbol};
-use pt_gate::owner::Stage;
 use pt_gate::status::{gate_status, Facts};
 use pt_store::db::Store;
 
@@ -16,16 +15,6 @@ pub fn config(action: &ConfigCmd) -> anyhow::Result<i32> {
             println!("{}", pt_config::hash::config_hash(&cfg));
             Ok(0)
         }
-    }
-}
-
-fn stage_name(stage: Stage) -> &'static str {
-    match stage {
-        Stage::Backtest => "backtest",
-        Stage::Ingest => "ingest",
-        Stage::DryRun => "dry_run",
-        Stage::FirstOrder => "first_order",
-        Stage::Paper => "paper",
     }
 }
 
@@ -84,7 +73,7 @@ pub fn gates() -> anyhow::Result<i32> {
         bars_loaded,
         first_order_sent: false,
     };
-    println!("stage: {}", stage_name(owner.stage));
+    println!("stage: {}", owner.stage.as_str());
     for item in gate_status(&owner, &facts) {
         if item.done {
             println!("{}: done", item.id);

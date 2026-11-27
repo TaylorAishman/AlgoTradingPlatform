@@ -4,9 +4,11 @@ mod cli;
 mod cmd_backtest;
 mod cmd_config;
 mod cmd_data;
+mod cmd_kill;
 mod cmd_ops;
 mod cmd_run;
 mod cmd_validate;
+mod strategies;
 mod wiring;
 
 use std::process::ExitCode;
@@ -63,8 +65,8 @@ fn dispatch(cli: &Cli) -> anyhow::Result<i32> {
         Command::Validate { action } => cmd_validate::validate(action),
         Command::Run => cmd_run::run(),
         Command::Halt { action } => cmd_ops::halt(action),
-        Command::CancelOpen(args) => cmd_ops::cancel_open(args),
-        Command::Flatten(args) => cmd_ops::flatten(args),
+        Command::CancelOpen(args) => cmd_kill::cancel_open(args),
+        Command::Flatten(args) => cmd_kill::flatten(args),
         Command::Report => cmd_ops::report(),
         Command::Status { max_age_hours } => cmd_ops::status(*max_age_hours),
         Command::Signoff { action } => cmd_ops::signoff(action),
@@ -73,6 +75,7 @@ fn dispatch(cli: &Cli) -> anyhow::Result<i32> {
 
 fn main() -> ExitCode {
     let cli = Cli::parse();
+    wiring::set_config_flag(cli.config.clone());
     match dispatch(&cli) {
         Ok(code) => ExitCode::from(u8::try_from(code).unwrap_or(1)),
         Err(err) => {
